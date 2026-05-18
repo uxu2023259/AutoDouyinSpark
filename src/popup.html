@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>抖音自动续火花助手</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body data-page="home">
+  <main class="panel">
+    <h1>抖音自动续火花助手</h1>
+    <p class="tip">开始页保留运行入口和日志状态，配置请从独立设置页进入。</p>
+
+    <div class="actions">
+      <button id="settingsButton" type="button">打开设置页</button>
+      <button id="openButton" type="button">打开创作者聊天页</button>
+      <button id="panelButton" type="button">打开永久置顶控制台</button>
+      <button id="runButton" type="button">立即执行一次</button>
+    </div>
+
+    <section class="status">
+      <h2>当前状态</h2>
+      <pre id="statusText">尚未运行</pre>
+    </section>
+  </main>
+  <script src="popup.js"></script>
+</body>
+</html>

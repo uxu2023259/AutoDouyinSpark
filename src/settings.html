@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>抖音自动续火花助手设置</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body data-page="settings">
+  <main class="panel panel-wide">
+    <h1>抖音自动续火花助手设置</h1>
+    <p class="tip">打开设置页时会自动读取固定文件：<br><code>C:\Users\Administrator\Downloads\douyin-chat-config.json</code></p>
+
+    <label class="field">
+      <span>启用状态</span>
+      <input id="enabled" type="checkbox">
+    </label>
+
+    <label class="field">
+      <span>巡检间隔（分钟）</span>
+      <input id="intervalMinutes" type="number" min="1" max="240">
+    </label>
+
+    <label class="field">
+      <span>固定触发时间</span>
+      <input id="fixedTime" type="time">
+    </label>
+
+    <label class="field">
+      <span>目标会话关键词</span>
+      <textarea id="targets" rows="5" placeholder="每行一个，例如：张三"></textarea>
+    </label>
+
+    <label class="field">
+      <span>发送内容</span>
+      <textarea id="messageText" rows="4" placeholder="例如：续火花啦，记得回我一下~"></textarea>
+    </label>
+
+    <label class="field">
+      <span>每日最大发送次数</span>
+      <input id="dailyLimit" type="number" min="1" max="200">
+    </label>
+
+    <label class="field">
+      <span>每个用户冷却时间（分钟）</span>
+      <input id="cooldownMinutes" type="number" min="0" max="10080">
+    </label>
+
+    <div class="actions">
+      <button id="saveButton" type="button">保存配置</button>
+      <button id="reloadConfigButton" type="button" class="secondary">重新读取固定配置文件</button>
+      <button id="backButton" type="button" class="secondary">返回开始页</button>
+    </div>
+
+    <section class="status">
+      <h2>设置页状态</h2>
+      <pre id="statusText">正在读取配置...</pre>
+    </section>
+  </main>
+  <script src="popup.js"></script>
+</body>
+</html>

@@ -1,0 +1,35 @@
+{
+  "manifest_version": 3,
+  "name": "抖音自动续火花助手",
+  "description": "在登录状态下自动巡检抖音私信指定会话并发送续火花消息。",
+  "version": "1.0.33",
+  "permissions": [
+    "storage",
+    "tabs",
+    "alarms",
+    "scripting",
+    "windows"
+  ],
+  "host_permissions": [
+    "https://creator.douyin.com/*",
+    "file:///*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "抖音自动续火花助手",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://creator.douyin.com/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}

@@ -1,0 +1,53 @@
+# 本地构建输出
+target/
+build/*
+!build/
+!build/version.json
+PLUGIN/
+
+# 本地运行数据与调试输出
+DouyinAutoSpark/
+browser-profile/
+logs/
+screenshots/
+*.log
+*.tmp
+*.bak
+*.pid
+
+# Java 与打包产物
+*.class
+*.jar
+*.war
+*.ear
+*.zip
+*.exe
+*.dll
+*.msi
+*.dmg
+*.pkg
+
+# Maven 本地辅助文件
+.mvn/timing.properties
+.mvn/wrapper/maven-wrapper.jar
+
+# IDE 与编辑器
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws
+.project
+.classpath
+.settings/
+
+# 操作系统文件
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 本地学习记录，避免误提交敏感或噪声信息
+.learnings/
+
+# 浏览器保存页面的资源目录，真实页面快照需要先脱敏
+抖音创作者中心_files/
