@@ -83,6 +83,43 @@ function Assert-VersionSync {
   }
 }
 
+function Invoke-NativeProcess {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$FilePath,
+    [Parameter(Mandatory = $true)]
+    [string[]]$Arguments
+  )
+
+  $processInfo = [System.Diagnostics.ProcessStartInfo]::new()
+  $processInfo.FileName = $FilePath
+  $processInfo.UseShellExecute = $false
+  $processInfo.RedirectStandardOutput = $true
+  $processInfo.RedirectStandardError = $true
+  $processInfo.StandardOutputEncoding = [System.Text.UTF8Encoding]::new($false)
+  $processInfo.StandardErrorEncoding = [System.Text.UTF8Encoding]::new($false)
+
+  foreach ($argument in $Arguments) {
+    [void]$processInfo.ArgumentList.Add($argument)
+  }
+
+  $process = [System.Diagnostics.Process]::new()
+  $process.StartInfo = $processInfo
+  [void]$process.Start()
+  $standardOutput = $process.StandardOutput.ReadToEnd()
+  $standardError = $process.StandardError.ReadToEnd()
+  $process.WaitForExit()
+
+  if (-not [string]::IsNullOrWhiteSpace($standardOutput)) {
+    Write-Host $standardOutput.TrimEnd()
+  }
+  if (-not [string]::IsNullOrWhiteSpace($standardError)) {
+    Write-Host $standardError.TrimEnd()
+  }
+
+  return $process.ExitCode
+}
+
 function Invoke-PlaywrightInstall {
   param([string]$BrowserInstallDir)
 
@@ -184,8 +221,8 @@ $jpackageArgs = @(
 )
 Write-Host "jpackage 路径：$($jpackageCommand.Source)"
 Write-Host "jpackage 参数：$($jpackageArgs -join ' ')"
-& $jpackageCommand.Source @jpackageArgs
-if ($LASTEXITCODE -ne 0) {
+$jpackageExitCode = Invoke-NativeProcess -FilePath $jpackageCommand.Source -Arguments $jpackageArgs
+if ($jpackageExitCode -ne 0) {
   throw "jpackage 生成程序失败"
 }
 
