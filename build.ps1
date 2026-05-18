@@ -98,6 +98,11 @@ function Invoke-NativeProcess {
   $processInfo.RedirectStandardError = $true
   $processInfo.StandardOutputEncoding = [System.Text.UTF8Encoding]::new($false)
   $processInfo.StandardErrorEncoding = [System.Text.UTF8Encoding]::new($false)
+  $processInfo.WorkingDirectory = $root
+
+  foreach ($key in @("JPACKAGE_ARGS", "JPACKAGE_OPTIONS", "JAVA_TOOL_OPTIONS", "JDK_JAVA_OPTIONS")) {
+    [void]$processInfo.Environment.Remove($key)
+  }
 
   foreach ($argument in $Arguments) {
     [void]$processInfo.ArgumentList.Add($argument)
@@ -118,6 +123,51 @@ function Invoke-NativeProcess {
   }
 
   return $process.ExitCode
+}
+
+function New-PortableAppImage {
+  param(
+    [string]$AppImagePath,
+    [string]$AppImageName,
+    [string]$JpackageInput
+  )
+
+  Write-Host "正在使用便携目录方式生成 Windows 程序镜像。"
+  New-Item -ItemType Directory -Path $AppImagePath -Force | Out-Null
+  $appDir = Join-Path $AppImagePath "app"
+  $runtimeDir = Join-Path $AppImagePath "runtime"
+  New-Item -ItemType Directory -Path $appDir -Force | Out-Null
+  Copy-Item -LiteralPath (Join-Path $JpackageInput "*") -Destination $appDir -Force
+  Copy-Item -LiteralPath (Join-Path $env:JAVA_HOME "*") -Destination $runtimeDir -Recurse -Force
+
+  $launcher = @"
+@echo off
+setlocal
+set "APP_HOME=%~dp0"
+set "JAVA_EXE=%APP_HOME%runtime\bin\javaw.exe"
+if not exist "%JAVA_EXE%" set "JAVA_EXE=%APP_HOME%runtime\bin\java.exe"
+if not exist "%JAVA_EXE%" (
+  echo 未找到内置 Java 运行时，请完整解压程序包后再运行。
+  pause
+  exit /b 1
+)
+start "" "%JAVA_EXE%" -Dfile.encoding=UTF-8 -cp "%APP_HOME%app\*" com.douyin.autospark.DouyinAutoSparkApp
+"@
+  [System.IO.File]::WriteAllText((Join-Path $AppImagePath "$AppImageName.bat"), $launcher, [System.Text.UTF8Encoding]::new($false))
+
+  $consoleLauncher = @"
+@echo off
+setlocal
+set "APP_HOME=%~dp0"
+set "JAVA_EXE=%APP_HOME%runtime\bin\java.exe"
+if not exist "%JAVA_EXE%" (
+  echo 未找到内置 Java 运行时，请完整解压程序包后再运行。
+  pause
+  exit /b 1
+)
+"%JAVA_EXE%" -Dfile.encoding=UTF-8 -cp "%APP_HOME%app\*" com.douyin.autospark.DouyinAutoSparkApp
+"@
+  [System.IO.File]::WriteAllText((Join-Path $AppImagePath "$AppImageName-控制台诊断.bat"), $consoleLauncher, [System.Text.UTF8Encoding]::new($false))
 }
 
 function Invoke-PlaywrightInstall {
@@ -223,7 +273,11 @@ Write-Host "jpackage 路径：$($jpackageCommand.Source)"
 Write-Host "jpackage 参数：$($jpackageArgs -join ' ')"
 $jpackageExitCode = Invoke-NativeProcess -FilePath $jpackageCommand.Source -Arguments $jpackageArgs
 if ($jpackageExitCode -ne 0) {
-  throw "jpackage 生成程序失败"
+  Write-Host "jpackage 生成程序失败，将改用便携目录方式继续构建。"
+  if (Test-Path -LiteralPath $appImagePath) {
+    Remove-Item -LiteralPath $appImagePath -Recurse -Force
+  }
+  New-PortableAppImage -AppImagePath $appImagePath -AppImageName $appImageName -JpackageInput $jpackageInput
 }
 
 $readme = @"
@@ -245,8 +299,11 @@ chcp 65001 >nul
 cd /d "%~dp0"
 echo 正在启动抖音自动续火花助手...
 echo.
-if not exist "抖音自动续火花助手.exe" (
-  echo 未找到 抖音自动续火花助手.exe。请完整解压整个文件夹后再运行。
+set "启动入口="
+if exist "抖音自动续火花助手.exe" set "启动入口=%~dp0抖音自动续火花助手.exe"
+if not defined 启动入口 if exist "抖音自动续火花助手.bat" set "启动入口=%~dp0抖音自动续火花助手.bat"
+if not defined 启动入口 (
+  echo 未找到 抖音自动续火花助手.exe 或 抖音自动续火花助手.bat。请完整解压整个文件夹后再运行。
   pause
   exit /b 1
 )
@@ -262,7 +319,7 @@ if not exist "browsers" (
   pause
   exit /b 1
 )
-start "" "%~dp0抖音自动续火花助手.exe"
+start "" "%启动入口%"
 echo 已发出启动请求。如果窗口仍未出现，请查看日志目录：
 echo %APPDATA%\DouyinAutoSpark\logs
 pause
