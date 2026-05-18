@@ -170,16 +170,21 @@ Get-ChildItem -LiteralPath (Join-Path $root "target") -Filter "*.jar" -File | Wh
   Copy-Item -LiteralPath $_.FullName -Destination $jpackageInput -Force
 }
 Write-Host "正在生成 Windows 程序镜像..."
-& $jpackageCommand.Source `
-  --type app-image `
-  --name $appImageName `
-  --app-version $nextVersion `
-  --vendor "hyx" `
-  --input $jpackageInput `
-  --main-jar $mainJar `
-  --main-class "com.douyin.autospark.DouyinAutoSparkApp" `
-  --dest $jpackageRoot `
-  --java-options "-Dfile.encoding=UTF-8"
+$jpackageArgs = @(
+  "--verbose",
+  "--type", "app-image",
+  "--name", $appImageName,
+  "--app-version", $nextVersion,
+  "--vendor", "hyx",
+  "--input", $jpackageInput,
+  "--main-jar", $mainJar,
+  "--main-class", "com.douyin.autospark.DouyinAutoSparkApp",
+  "--dest", $jpackageRoot,
+  "--java-options", "-Dfile.encoding=UTF-8"
+)
+Write-Host "jpackage 路径：$($jpackageCommand.Source)"
+Write-Host "jpackage 参数：$($jpackageArgs -join ' ')"
+& $jpackageCommand.Source @jpackageArgs
 if ($LASTEXITCODE -ne 0) {
   throw "jpackage 生成程序失败"
 }

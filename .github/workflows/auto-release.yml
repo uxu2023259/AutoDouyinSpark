@@ -62,7 +62,7 @@ jobs:
         run: |
           [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
           $OutputEncoding = [Console]::OutputEncoding
-          pwsh -NoProfile -ExecutionPolicy Bypass -File .\build.ps1
+          & .\build.ps1
 
       - name: 读取发布版本与产物
         id: release_info
