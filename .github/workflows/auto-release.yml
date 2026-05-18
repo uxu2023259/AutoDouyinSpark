@@ -1,0 +1,157 @@
+name: 自动构建并发布版本
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - app/**
+      - src/**
+      - pom.xml
+      - plugin.yml
+      - build.ps1
+      - build/version.json
+
+permissions:
+  contents: write
+
+concurrency:
+  group: 自动发布-main
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: 构建、打标签并发布
+    runs-on: windows-latest
+    if: ${{ github.ref_name == 'main' && (github.event_name == 'workflow_dispatch' || !startsWith(github.event.head_commit.message, '发布版本 v')) }}
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: 设置 JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: 显示构建环境
+        shell: pwsh
+        run: |
+          [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+          $OutputEncoding = [Console]::OutputEncoding
+          Write-Host "正在显示 Java 与 Maven 版本。"
+          java -version
+          mvn -version
+          jpackage --version
+
+      - name: 配置 Git 提交身份
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config core.quotepath false
+
+      - name: 执行自动构建
+        shell: pwsh
+        run: |
+          [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+          $OutputEncoding = [Console]::OutputEncoding
+          pwsh -NoProfile -ExecutionPolicy Bypass -File .\build.ps1
+
+      - name: 读取发布版本与产物
+        id: release_info
+        shell: pwsh
+        run: |
+          [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+          $OutputEncoding = [Console]::OutputEncoding
+          $versionData = Get-Content -LiteralPath "build/version.json" -Raw -Encoding UTF8 | ConvertFrom-Json
+          $version = [string]$versionData.version
+          if ([string]::IsNullOrWhiteSpace($version)) {
+            throw "未能读取发布版本号。"
+          }
+          $tag = "v$version"
+          $zip = Get-ChildItem -LiteralPath "PLUGIN" -Filter "douyin-auto-spark-$version-windows.zip" -File | Select-Object -First 1
+          if (-not $zip) {
+            throw "未找到发布压缩包：PLUGIN\douyin-auto-spark-$version-windows.zip"
+          }
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "artifact=$($zip.FullName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          Write-Host "发布版本：$version"
+          Write-Host "发布标签：$tag"
+          Write-Host "发布产物：$($zip.FullName)"
+
+      - name: 提交版本号变更并创建标签
+        shell: pwsh
+        run: |
+          [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+          $OutputEncoding = [Console]::OutputEncoding
+          $version = "${{ steps.release_info.outputs.version }}"
+          $tag = "${{ steps.release_info.outputs.tag }}"
+          git fetch origin main --tags
+          if (git rev-parse "$tag" 2>$null) {
+            throw "标签 $tag 已存在，请检查 build/version.json 或删除重复标签后重试。"
+          }
+          git add pom.xml plugin.yml src/manifest.json build/version.json
+          if (git diff --cached --quiet) {
+            throw "没有检测到版本号变更，已停止发布。"
+          }
+          git commit -m "发布版本 $tag [skip ci]"
+          git tag -a "$tag" -m "发布版本 $tag"
+          git push origin HEAD:main
+          git push origin "$tag"
+
+      - name: 生成发布说明
+        shell: pwsh
+        run: |
+          [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+          $OutputEncoding = [Console]::OutputEncoding
+          $version = "${{ steps.release_info.outputs.version }}"
+          $tag = "${{ steps.release_info.outputs.tag }}"
+          $content = @"
+          ## 发布内容
+
+          - 自动构建 Windows 完整程序包。
+          - 自动同步版本号并创建标签 `$tag`。
+          - 发布包已包含 Java 运行时、Chromium 浏览器、程序主包、启动诊断脚本和使用说明。
+
+          ## 使用方式
+
+          1. 下载 `douyin-auto-spark-$version-windows.zip`。
+          2. 完整解压整个文件夹，不要只复制 `.exe`，也不要直接在压缩包中运行。
+          3. 双击 `抖音自动续火花助手.exe` 启动程序。
+          4. 首次使用点击“打开登录/聊天页”，手动完成抖音创作者中心登录。
+
+          ## 注意事项
+
+          - 程序不会绕过验证码、风控、扫码登录或账号安全验证。
+          - 配置、日志、状态和失败截图保存在 `%APPDATA%\DouyinAutoSpark`。
+          - 如页面结构变化导致发送失败，请提交脱敏后的日志摘要和失败截图。
+          "@
+          $normalized = ($content -split "`r?`n" | ForEach-Object { $_.TrimStart() }) -join "`n"
+          [System.IO.File]::WriteAllText("release-notes.md", $normalized + "`n", [System.Text.UTF8Encoding]::new($false))
+
+      - name: 创建 GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+          $OutputEncoding = [Console]::OutputEncoding
+          $version = "${{ steps.release_info.outputs.version }}"
+          $tag = "${{ steps.release_info.outputs.tag }}"
+          $artifact = "${{ steps.release_info.outputs.artifact }}"
+          gh release create "$tag" "$artifact" --title "抖音自动续火花助手 $version" --notes-file "release-notes.md" --latest
+
+      - name: 上传工作流构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: 抖音自动续火花助手-${{ steps.release_info.outputs.version }}
+          path: ${{ steps.release_info.outputs.artifact }}
+          if-no-files-found: error

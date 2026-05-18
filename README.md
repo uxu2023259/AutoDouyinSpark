@@ -70,12 +70,24 @@ pwsh -ExecutionPolicy Bypass -File .\build.ps1
 
 完整说明见 [开发与发布](docs/开发与发布.md)。
 
+## GitHub 自动发布
+
+仓库包含 `.github/workflows/auto-release.yml`，支持在 `main` 分支源码变更后自动完成以下流程：
+
+1. 在 Windows Runner 上设置 JDK 21。
+2. 执行 `build.ps1`，自动递增版本并构建完整 Windows 压缩包。
+3. 提交版本号变更到 `main`。
+4. 创建 `v版本号` 标签。
+5. 创建 GitHub Release 并上传 `douyin-auto-spark-*-windows.zip`。
+
+如需手动发布，也可以在 GitHub Actions 页面运行“自动构建并发布版本”工作流。仓库需要允许 `GITHUB_TOKEN` 具备写入权限，路径为：仓库 Settings → Actions → General → Workflow permissions → Read and write permissions。
+
 ## GitHub 发布建议
 
 - 不要把 `target`、`build`、展开后的 `PLUGIN` 目录、浏览器登录态、日志或截图提交到仓库。
-- 发布给普通用户的压缩包建议放到 GitHub Releases，不建议直接提交到源码仓库。
+- 发布给普通用户的压缩包会由 GitHub Actions 上传到 GitHub Releases，不建议直接提交到源码仓库。
 - 上传前请执行测试，并确认离线页面快照不包含真实账号、头像、昵称、消息内容或 Cookie。
-- 本仓库已准备 `.gitignore`、`.gitattributes`、贡献说明、问题模板和安全说明。
+- 本仓库已准备 `.gitignore`、`.gitattributes`、贡献说明、问题模板、安全说明和自动发布工作流。
 
 ## 安全与合规
 
