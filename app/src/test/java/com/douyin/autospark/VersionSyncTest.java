@@ -16,17 +16,14 @@ class VersionSyncTest {
   void allVersionFilesStayInSync() throws Exception {
     String pom = Files.readString(Path.of("pom.xml"), StandardCharsets.UTF_8);
     String plugin = Files.readString(Path.of("plugin.yml"), StandardCharsets.UTF_8);
-    String manifest = Files.readString(Path.of("src", "manifest.json"), StandardCharsets.UTF_8);
     String version = Files.readString(Path.of("build", "version.json"), StandardCharsets.UTF_8);
 
     String pomVersion = firstMatch(pom, "<artifactId>douyin-auto-spark</artifactId>\\s*<version>([^<]+)</version>");
     String pluginVersion = firstMatch(plugin, "(?m)^version:\\s*([^\\r\\n]+)");
-    String manifestVersion = firstMatch(manifest, "\\\"version\\\"\\s*:\\s*\\\"([^\\\"]+)\\\"");
     String buildVersion = firstMatch(version, "\\\"version\\\"\\s*:\\s*\\\"([^\\\"]+)\\\"");
 
     assertTrue(pomVersion.matches("\\d+\\.\\d+\\.\\d+"));
     assertEquals(pomVersion, pluginVersion);
-    assertEquals(pomVersion, manifestVersion);
     assertEquals(pomVersion, buildVersion);
   }
 

@@ -5,7 +5,7 @@
 
   <groupId>com.douyin.autospark</groupId>
   <artifactId>douyin-auto-spark</artifactId>
-  <version>1.0.52</version>
+  <version>1.0.53</version>
   <name>抖音自动续火花助手</name>
   <description>抖音自动续火花无人值守 Windows 程序</description>
 
@@ -49,6 +49,11 @@
         <directory>app/src/main/resources</directory>
       </resource>
     </resources>
+    <testResources>
+      <testResource>
+        <directory>app/src/test/resources</directory>
+      </testResource>
+    </testResources>
     <plugins>
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>

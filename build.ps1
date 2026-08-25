@@ -3,12 +3,10 @@ $ErrorActionPreference = "Stop"
 $OutputEncoding = [Console]::OutputEncoding
 
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
-$srcDir = Join-Path $root "src"
 $buildDir = Join-Path $root "build"
 $pluginDir = Join-Path $root "PLUGIN"
 $versionFile = Join-Path $buildDir "version.json"
 $pluginYaml = Join-Path $root "plugin.yml"
-$manifestPath = Join-Path $srcDir "manifest.json"
 $pomPath = Join-Path $root "pom.xml"
 $bundledBrowsersDir = Join-Path $buildDir "bundled-browsers"
 
@@ -66,7 +64,6 @@ function Assert-VersionSync {
 
   $pomText = Get-Content -LiteralPath $pomPath -Raw -Encoding UTF8
   $pluginText = Get-Content -LiteralPath $pluginYaml -Raw -Encoding UTF8
-  $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
   $versionData = Get-Content -LiteralPath $versionFile -Raw -Encoding UTF8 | ConvertFrom-Json
   $escapedVersion = [System.Text.RegularExpressions.Regex]::Escape($Version)
   if ($pomText -notmatch ("<version>" + $escapedVersion + "</version>")) {
@@ -74,9 +71,6 @@ function Assert-VersionSync {
   }
   if ($pluginText -notmatch ("(?m)^version:\s*" + $escapedVersion + "\s*$")) {
     throw "plugin.yml 版本未同步为 $Version"
-  }
-  if ($manifest.version -ne $Version) {
-    throw "manifest.json 版本未同步为 $Version"
   }
   if ($versionData.version -ne $Version) {
     throw "build/version.json 版本未同步为 $Version"
@@ -249,22 +243,11 @@ if (Test-Path -LiteralPath $pluginDir) {
 $nextVersion = Get-NextVersion
 Write-Host "准备构建无人值守程序，版本：$nextVersion"
 Set-JsonVersion -Path $versionFile -Version $nextVersion
-Set-JsonVersion -Path $manifestPath -Version $nextVersion
 Set-PluginYamlVersion -Path $pluginYaml -Version $nextVersion
 Set-PomVersion -Path $pomPath -Version $nextVersion
 Assert-VersionSync -Version $nextVersion
 
 New-Item -ItemType Directory -Path $buildDir -Force | Out-Null
-$legacyLib = Join-Path $root "target\lib"
-if (Test-Path -LiteralPath $legacyLib) {
-  Remove-Item -LiteralPath $legacyLib -Recurse -Force
-}
-foreach ($legacyArtifactDir in @((Join-Path $buildDir "douyin-auto-spark"), (Join-Path $buildDir "douyin-creator-auto-chat"))) {
-  if (Test-Path -LiteralPath $legacyArtifactDir) {
-    Remove-Item -LiteralPath $legacyArtifactDir -Recurse -Force
-  }
-}
-
 Write-Host "正在执行 Maven 测试和打包..."
 & mvn -DskipTests=false package
 if ($LASTEXITCODE -ne 0) {

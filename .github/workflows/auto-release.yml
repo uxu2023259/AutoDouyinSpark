@@ -7,7 +7,6 @@ on:
       - main
     paths:
       - app/**
-      - src/**
       - pom.xml
       - plugin.yml
       - build.ps1
@@ -103,7 +102,7 @@ jobs:
           if ($tagLookupExitCode -ne 1) {
             throw "检查标签 $tag 时 Git 返回异常状态：$tagLookupExitCode"
           }
-          git add pom.xml plugin.yml src/manifest.json build/version.json
+          git add pom.xml plugin.yml build/version.json
           if (git diff --cached --quiet) {
             throw "没有检测到版本号变更，已停止发布。"
           }
@@ -155,7 +154,7 @@ jobs:
           gh release create "$tag" "$artifact" --title "抖音自动续火花助手 $version" --notes-file "release-notes.md" --latest
 
       - name: 上传工作流构建产物
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: 抖音自动续火花助手-${{ steps.release_info.outputs.version }}
           path: ${{ steps.release_info.outputs.artifact }}
