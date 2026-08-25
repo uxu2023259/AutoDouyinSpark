@@ -5,7 +5,7 @@
 
   <groupId>com.douyin.autospark</groupId>
   <artifactId>douyin-auto-spark</artifactId>
-  <version>1.0.53</version>
+  <version>1.0.54</version>
   <name>抖音自动续火花助手</name>
   <description>抖音自动续火花无人值守 Windows 程序</description>
 
