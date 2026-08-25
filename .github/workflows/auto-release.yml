@@ -28,13 +28,13 @@ jobs:
 
     steps:
       - name: 检出代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           ref: main
           fetch-depth: 0
 
       - name: 设置 JDK 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '21'
@@ -95,8 +95,13 @@ jobs:
           $version = "${{ steps.release_info.outputs.version }}"
           $tag = "${{ steps.release_info.outputs.tag }}"
           git fetch origin main --tags
-          if (git rev-parse "$tag" 2>$null) {
+          git show-ref --verify --quiet "refs/tags/$tag"
+          $tagLookupExitCode = $LASTEXITCODE
+          if ($tagLookupExitCode -eq 0) {
             throw "标签 $tag 已存在，请检查 build/version.json 或删除重复标签后重试。"
+          }
+          if ($tagLookupExitCode -ne 1) {
+            throw "检查标签 $tag 时 Git 返回异常状态：$tagLookupExitCode"
           }
           git add pom.xml plugin.yml src/manifest.json build/version.json
           if (git diff --cached --quiet) {

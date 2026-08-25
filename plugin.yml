@@ -1,4 +1,4 @@
 name: douyin-auto-spark
-version: 1.0.50
+version: 1.0.51
 main: src/manifest.json
 description: 抖音自动续火花无人值守 Windows 程序
