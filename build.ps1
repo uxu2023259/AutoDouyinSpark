@@ -100,7 +100,14 @@ function Invoke-NativeProcess {
   $processInfo.StandardErrorEncoding = [System.Text.UTF8Encoding]::new($false)
   $processInfo.WorkingDirectory = $root
 
-  foreach ($key in @("JPACKAGE_ARGS", "JPACKAGE_OPTIONS", "JAVA_TOOL_OPTIONS", "JDK_JAVA_OPTIONS")) {
+  foreach ($key in @(
+      "JPACKAGE_ARGS",
+      "JPACKAGE_OPTIONS",
+      "JAVA_TOOL_OPTIONS",
+      "JDK_JAVA_OPTIONS",
+      "_JAVA_OPTIONS",
+      "JAVA_OPTIONS"
+    )) {
     [void]$processInfo.Environment.Remove($key)
   }
 
@@ -111,9 +118,11 @@ function Invoke-NativeProcess {
   $process = [System.Diagnostics.Process]::new()
   $process.StartInfo = $processInfo
   [void]$process.Start()
-  $standardOutput = $process.StandardOutput.ReadToEnd()
-  $standardError = $process.StandardError.ReadToEnd()
+  $standardOutputTask = $process.StandardOutput.ReadToEndAsync()
+  $standardErrorTask = $process.StandardError.ReadToEndAsync()
   $process.WaitForExit()
+  $standardOutput = $standardOutputTask.GetAwaiter().GetResult()
+  $standardError = $standardErrorTask.GetAwaiter().GetResult()
 
   if (-not [string]::IsNullOrWhiteSpace($standardOutput)) {
     Write-Host $standardOutput.TrimEnd()
@@ -123,6 +132,31 @@ function Invoke-NativeProcess {
   }
 
   return $process.ExitCode
+}
+
+function Copy-DirectoryContents {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$Source,
+    [Parameter(Mandatory = $true)]
+    [string]$Destination,
+    [Parameter(Mandatory = $true)]
+    [string]$Description
+  )
+
+  if (-not (Test-Path -LiteralPath $Source -PathType Container)) {
+    throw "$Description 不存在：$Source"
+  }
+
+  $entries = @(Get-ChildItem -LiteralPath $Source -Force)
+  if ($entries.Count -eq 0) {
+    throw "$Description 为空：$Source"
+  }
+
+  New-Item -ItemType Directory -Path $Destination -Force | Out-Null
+  foreach ($entry in $entries) {
+    Copy-Item -LiteralPath $entry.FullName -Destination $Destination -Recurse -Force
+  }
 }
 
 function New-PortableAppImage {
@@ -136,9 +170,8 @@ function New-PortableAppImage {
   New-Item -ItemType Directory -Path $AppImagePath -Force | Out-Null
   $appDir = Join-Path $AppImagePath "app"
   $runtimeDir = Join-Path $AppImagePath "runtime"
-  New-Item -ItemType Directory -Path $appDir -Force | Out-Null
-  Copy-Item -LiteralPath (Join-Path $JpackageInput "*") -Destination $appDir -Force
-  Copy-Item -LiteralPath (Join-Path $env:JAVA_HOME "*") -Destination $runtimeDir -Recurse -Force
+  Copy-DirectoryContents -Source $JpackageInput -Destination $appDir -Description "便携程序输入目录"
+  Copy-DirectoryContents -Source $env:JAVA_HOME -Destination $runtimeDir -Description "Java 运行时目录"
 
   $launcher = @"
 @echo off
@@ -241,6 +274,10 @@ if ($LASTEXITCODE -ne 0) {
 Invoke-PlaywrightInstall -BrowserInstallDir $bundledBrowsersDir
 
 $jpackageCommand = Get-Command jpackage -ErrorAction Stop
+$javaCommand = Join-Path (Split-Path -Parent $jpackageCommand.Source) "java.exe"
+if (-not (Test-Path -LiteralPath $javaCommand -PathType Leaf)) {
+  throw "未找到与 jpackage 同目录的 java.exe：$javaCommand"
+}
 $jpackageRoot = Join-Path $buildDir "jpackage"
 $jpackageInput = Join-Path $buildDir "jpackage-input"
 $appImageName = "抖音自动续火花助手"
@@ -275,7 +312,8 @@ $jpackageArgs = @(
 )
 Write-Host "jpackage 路径：$($jpackageCommand.Source)"
 Write-Host "jpackage 参数：$($jpackageArgs -join ' ')"
-$jpackageExitCode = Invoke-NativeProcess -FilePath $jpackageCommand.Source -Arguments $jpackageArgs
+$jpackageModuleArgs = @("--module", "jdk.jpackage/jdk.jpackage.main.Main") + $jpackageArgs
+$jpackageExitCode = Invoke-NativeProcess -FilePath $javaCommand -Arguments $jpackageModuleArgs
 if ($jpackageExitCode -ne 0) {
   Write-Host "jpackage 生成程序失败，将改用便携目录方式继续构建。"
   if (Test-Path -LiteralPath $appImagePath) {
