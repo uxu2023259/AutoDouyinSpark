@@ -15,8 +15,13 @@ class OfflineSelectorTest {
     String html = Files.readString(snapshot, StandardCharsets.UTF_8);
 
     assertTrue(html.contains("ReactVirtualized__Grid"));
+    assertTrue(html.contains("role=\"gridcell\""));
+    assertTrue(html.contains("role=\"list-item\""));
+    assertTrue(html.contains("item-header-name"));
     assertTrue(html.contains("box-header-name"));
     assertTrue(html.contains("contenteditable=\"true\""));
-    assertTrue(html.contains(">发送<"));
+    assertTrue(html.contains("semi-button-content\">发送</span>"));
+    assertTrue(html.contains("is-me-"));
+    assertTrue(html.contains("text-item-message-"));
   }
 }

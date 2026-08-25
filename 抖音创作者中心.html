@@ -8,7 +8,13 @@
   <main id="root">
     <section class="conversation-list">
       <div aria-label="grid" aria-readonly="true" class="ReactVirtualized__Grid ReactVirtualized__List" role="grid" tabindex="0">
-        <div class="conversation-item selected">测试会话</div>
+        <div class="ReactVirtualized__Grid__innerScrollContainer" role="row">
+          <div role="gridcell">
+            <li class="semi-list-item selected-test" role="list-item">
+              <span class="item-header-name-test">测试会话</span>
+            </li>
+          </div>
+        </div>
       </div>
     </section>
     <section class="chat-box">
@@ -19,6 +25,16 @@
         <div class="chat-input-nSWBco" contenteditable="true"></div>
         <button class="semi-button chat-btn" type="button"><span class="semi-button-content">发送</span></button>
       </div>
+      <ul class="chat-ul-test">
+        <li class="chat-li-test">
+          <div class="box-item-test is-me-test">
+            <div class="box-item-message-test">
+              <pre class="text-item-message-test">测试消息</pre>
+            </div>
+            <span class="message-status-test">已送达</span>
+          </div>
+        </li>
+      </ul>
     </section>
   </main>
 </body>

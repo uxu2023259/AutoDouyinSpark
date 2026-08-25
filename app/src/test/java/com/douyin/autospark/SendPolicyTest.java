@@ -41,4 +41,18 @@ class SendPolicyTest {
     assertEquals(1, state.getSentToday());
     assertFalse(state.getPerTarget().isEmpty());
   }
+
+  @Test
+  void sameNameConversationsUseIndependentCooldownKeys() {
+    AppConfig config = new AppConfig();
+    config.setCooldownMinutes(60);
+    SendState state = new SendState();
+    SendPolicy policy = new SendPolicy();
+    LocalDateTime now = LocalDateTime.now();
+
+    policy.markSent(state, "会话标识:会话-1", now.minusMinutes(10));
+
+    assertTrue(policy.cooldownReason(state, config, "会话标识:会话-1", "同名好友", now).contains("仍在冷却中"));
+    assertTrue(policy.cooldownReason(state, config, "会话标识:会话-2", "同名好友", now).isBlank());
+  }
 }

@@ -1,21 +1,14 @@
 package com.douyin.autospark;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.SerializationFeature;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
-
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
 public class AppPaths {
   private final Path appDir;
-  private final Path configPath;
-  private final Path statePath;
+  private final Path accountsDir;
+  private final Path accountsPath;
   private final Path logDir;
-  private final Path screenshotDir;
-  private final Path browserProfileDir;
 
   public AppPaths() {
     this(resolveDefaultAppDir());
@@ -23,11 +16,9 @@ public class AppPaths {
 
   public AppPaths(Path appDir) {
     this.appDir = appDir;
-    this.configPath = appDir.resolve("config.json");
-    this.statePath = appDir.resolve("state.json");
+    this.accountsDir = appDir.resolve("accounts");
+    this.accountsPath = appDir.resolve("accounts.json");
     this.logDir = appDir.resolve("logs");
-    this.screenshotDir = appDir.resolve("screenshots");
-    this.browserProfileDir = appDir.resolve("browser-profile");
   }
 
   public static Path resolveDefaultAppDir() {
@@ -40,32 +31,43 @@ public class AppPaths {
 
   public void ensureDirectories() throws IOException {
     Files.createDirectories(appDir);
+    Files.createDirectories(accountsDir);
     Files.createDirectories(logDir);
-    Files.createDirectories(screenshotDir);
-    Files.createDirectories(browserProfileDir);
   }
 
   public Path appDir() {
     return appDir;
   }
 
-  public Path configPath() {
-    return configPath;
+  public Path accountsDir() {
+    return accountsDir;
   }
 
-  public Path statePath() {
-    return statePath;
+  public Path accountsPath() {
+    return accountsPath;
   }
 
   public Path logDir() {
     return logDir;
   }
 
-  public Path screenshotDir() {
-    return screenshotDir;
+  public AccountPaths account(String accountId) {
+    return new AccountPaths(accountsDir.resolve(AccountProfile.requireValidId(accountId)));
   }
 
-  public Path browserProfileDir() {
-    return browserProfileDir;
+  public Path legacyConfigPath() {
+    return appDir.resolve("config.json");
+  }
+
+  public Path legacyStatePath() {
+    return appDir.resolve("state.json");
+  }
+
+  public Path legacyBrowserProfileDir() {
+    return appDir.resolve("browser-profile");
+  }
+
+  public Path legacyScreenshotDir() {
+    return appDir.resolve("screenshots");
   }
 }

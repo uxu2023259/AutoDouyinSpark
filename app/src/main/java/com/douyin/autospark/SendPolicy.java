@@ -11,11 +11,18 @@ public class SendPolicy {
   }
 
   public String cooldownReason(SendState state, AppConfig config, String target, LocalDateTime now) {
+    return cooldownReason(state, config, target, target, now);
+  }
+
+  public String cooldownReason(SendState state, AppConfig config, String stateKey, String displayName, LocalDateTime now) {
     state.normalize();
     if (config.getCooldownMinutes() <= 0) {
       return "";
     }
-    Long lastSentAt = state.getPerTarget().get(target);
+    Long lastSentAt = state.getPerTarget().get(stateKey);
+    if (lastSentAt == null && !stateKey.equals(displayName)) {
+      lastSentAt = state.getPerTarget().get(displayName);
+    }
     if (lastSentAt == null || lastSentAt <= 0) {
       return "";
     }
@@ -25,7 +32,7 @@ public class SendPolicy {
       return "";
     }
     long remaining = config.getCooldownMinutes() - elapsedMinutes;
-    return target + " 仍在冷却中，剩余约 " + Math.max(1, remaining) + " 分钟";
+    return displayName + " 仍在冷却中，剩余约 " + Math.max(1, remaining) + " 分钟";
   }
 
   public void markSent(SendState state, String target, LocalDateTime now) {

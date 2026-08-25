@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "抖音自动续火花助手",
   "description": "在登录状态下自动巡检抖音私信指定会话并发送续火花消息。",
-  "version": "1.0.33",
+  "version": "1.0.49",
   "permissions": [
     "storage",
     "tabs",

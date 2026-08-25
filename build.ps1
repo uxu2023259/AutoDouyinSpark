@@ -203,6 +203,16 @@ function Invoke-PlaywrightInstall {
   Write-Host "内置 Chromium 浏览器已准备完成：$($chrome.FullName)"
 }
 
+if (Test-Path -LiteralPath $pluginDir) {
+  try {
+    Get-ChildItem -LiteralPath $pluginDir -Force | Remove-Item -Recurse -Force -ErrorAction Stop
+  } catch {
+    throw "无法清空 PLUGIN 目录。请先关闭从 PLUGIN 目录启动的旧版抖音自动续火花助手及其浏览器，再重新构建。被占用详情：$($_.Exception.Message)"
+  }
+} else {
+  New-Item -ItemType Directory -Path $pluginDir | Out-Null
+}
+
 $nextVersion = Get-NextVersion
 Write-Host "准备构建无人值守程序，版本：$nextVersion"
 Set-JsonVersion -Path $versionFile -Version $nextVersion
@@ -210,12 +220,6 @@ Set-JsonVersion -Path $manifestPath -Version $nextVersion
 Set-PluginYamlVersion -Path $pluginYaml -Version $nextVersion
 Set-PomVersion -Path $pomPath -Version $nextVersion
 Assert-VersionSync -Version $nextVersion
-
-if (Test-Path -LiteralPath $pluginDir) {
-  Get-ChildItem -LiteralPath $pluginDir -Force | Remove-Item -Recurse -Force
-} else {
-  New-Item -ItemType Directory -Path $pluginDir | Out-Null
-}
 
 New-Item -ItemType Directory -Path $buildDir -Force | Out-Null
 $legacyLib = Join-Path $root "target\lib"
@@ -286,11 +290,19 @@ $readme = @"
 使用方式：
 1. 必须先完整解压整个“抖音自动续火花助手”文件夹，不能只复制 exe，也不要直接在压缩包里运行 exe。
 2. 双击“抖音自动续火花助手.exe”启动程序；如果没有窗口，请双击“启动诊断.cmd”查看中文提示。
-3. 首次使用请点击“打开登录/聊天页”，在浏览器中完成抖音创作者中心登录。
+3. 首次使用请在左侧选择账号，再点击“打开登录/聊天页”完成当前账号登录；成功后保持程序运行至少 15 秒，新增账号拥有独立登录态。
 4. 程序已包含 Chromium 浏览器本体，不需要另外安装浏览器。
-5. 程序会复用专用浏览器登录目录：%APPDATA%\DouyinAutoSpark\browser-profile。
+5. 程序会定期加固登录态并复用账号专用浏览器目录：%APPDATA%\DouyinAutoSpark\accounts\账号ID\browser-profile。
 6. 配置、状态、日志、失败截图均保存在：%APPDATA%\DouyinAutoSpark。
 7. 程序不会绕过验证码、风控或登录校验；登录失效时请重新登录。
+8. 服务器部署时，请先在可交互桌面完成登录，再在程序配置中启用“服务器无界面模式”。
+9. 无界面模式不依赖浏览器窗口置前、页面刷新或持续可见，并会在浏览器异常后自动恢复。
+10. 每个账号的配置、状态、浏览器资料和失败截图独立保存在 accounts\账号ID 目录；归档账号不会直接删除数据。
+11. 程序不支持多开；重复启动会显示中文提示，避免多个实例争用同一浏览器登录目录。
+12. 定时模式与间隔模式可独立或同时启用；自动触发会随机延迟 0–5 分钟，间隔从上一轮完成后重新计算。
+13. 失败会话默认 60 分钟后独立重试一次；程序主动跳过不算失败，结果不确定时会先核验原消息。
+14. 发送采用真实鼠标、滚轮和逐字键盘输入；只有检测到正确会话中的新增己方消息气泡才确认成功。
+15. 仿人节奏不保证规避平台限制，程序不会绕过登录、验证码或安全验证。
 "@
 [System.IO.File]::WriteAllText((Join-Path $appImagePath "使用说明.txt"), $readme, [System.Text.UTF8Encoding]::new($false))
 $diagnosticCmd = @"
