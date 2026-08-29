@@ -182,8 +182,7 @@ public class AutoRunner implements AutoCloseable {
     }
     SendState state = store.loadState();
     if (sendPolicy.dailyLimitReached(state, config)) {
-      logger.info("今日已达到 " + config.getDailyLimit() + " 次发送上限，本次任务按策略跳过。");
-      return;
+      logger.info("今日已达到 " + config.getDailyLimit() + " 次发送上限，本次仍会扫描全部目标，并将未发送会话排入次日续发队列。");
     }
 
     logger.info("开始执行任务：" + taskId + "，触发方式：" + triggerName + "。");
@@ -198,13 +197,15 @@ public class AutoRunner implements AutoCloseable {
         continue;
       }
       state = store.loadState();
-      if (hasPendingRetry(state, stateKey)) {
+      PendingRetry pendingRetry = findPendingRetry(state, stateKey);
+      if (pendingRetry != null && !DailyLimitDeferral.isDeferred(pendingRetry)) {
         addSkipped(results, target, "该会话已有独立重试任务，正常调度暂不提前重发");
         continue;
       }
       if (sendPolicy.dailyLimitReached(state, config)) {
-        addSkipped(results, target, "今日发送次数已达到上限");
-        break;
+        LocalDateTime dueAt = deferForDailyLimit(config, conversation);
+        addSkipped(results, target, "今日发送次数已达到上限，已排入 " + dueAt + " 后的自动续发队列");
+        continue;
       }
       String cooldown = sendPolicy.cooldownReason(state, config, stateKey, target, now());
       if (!cooldown.isBlank()) {
@@ -247,11 +248,14 @@ public class AutoRunner implements AutoCloseable {
         if (scheduleFailure && !failed.isBlocked()) scheduleDiscoveryRetry(config, query, failed, 0);
         continue;
       }
+      logger.info("关键词“" + query + "”已完整扫描会话列表，匹配到 "
+          + discovery.getConversations().size() + " 个会话。完全同名会话优先，其余包含关键词的会话继续处理。");
       for (ConversationTarget conversation : discovery.getConversations()) {
         if (conversation.getQuery().isBlank()) conversation.setQuery(query);
         conversations.putIfAbsent(conversation.stateKey(), conversation);
       }
     }
+    logger.info("全部关键词扫描完成，去重后本轮共有 " + conversations.size() + " 个待处理会话。");
     return conversations;
   }
 
@@ -352,12 +356,21 @@ public class AutoRunner implements AutoCloseable {
       logger.info("发送内容已变更，旧重试任务已主动取消，不发送过期内容。");
       return;
     }
+    state = store.loadState();
+    if (sendPolicy.dailyLimitReached(state, config)) {
+      LocalDateTime dueAt = DailyLimitDeferral.postpone(retry, now());
+      upsertRetry(state, retry);
+      store.saveState(state);
+      logger.info("目标 " + conversation.displayName() + " 今日发送次数已达到上限，续发任务已顺延至 " + dueAt + " 后。");
+      return;
+    }
     TaskResult result = sendTarget(config, conversation, taskId("失败重试"));
     addRecent(result);
     state = store.loadState();
     removeRetry(state, retry.getId());
     store.saveState(state);
-    handleTargetResult(config, conversation, result, retry.getRetriesCompleted() + 1);
+    int retriesCompleted = DailyLimitDeferral.isDeferred(retry) ? 0 : retry.getRetriesCompleted() + 1;
+    handleTargetResult(config, conversation, result, retriesCompleted);
   }
 
   private void processDiscoveryRetry(AppConfig config, PendingRetry retry, Set<String> processedKeys) throws IOException {
@@ -377,6 +390,12 @@ public class AutoRunner implements AutoCloseable {
     }
     for (ConversationTarget conversation : conversations.values()) {
       processedKeys.add(conversation.stateKey());
+      state = store.loadState();
+      if (sendPolicy.dailyLimitReached(state, config)) {
+        LocalDateTime dueAt = deferForDailyLimit(config, conversation);
+        logger.info("目标 " + conversation.displayName() + " 今日发送次数已达到上限，已排入 " + dueAt + " 后的自动续发队列。");
+        continue;
+      }
       TaskResult result = sendTarget(config, conversation, taskId("发现重试"));
       addRecent(result);
       handleTargetResult(config, conversation, result, retry.getRetriesCompleted() + 1);
@@ -445,8 +464,26 @@ public class AutoRunner implements AutoCloseable {
     logger.info("目标 " + target + " 已主动跳过：" + reason + "。");
   }
 
-  private boolean hasPendingRetry(SendState state, String stateKey) {
-    return state.getPendingRetries().stream().anyMatch(item -> item.getStateKey().equals(stateKey));
+  private PendingRetry findPendingRetry(SendState state, String stateKey) {
+    return state.getPendingRetries().stream()
+        .filter(item -> item.getStateKey().equals(stateKey))
+        .findFirst()
+        .orElse(null);
+  }
+
+  private LocalDateTime deferForDailyLimit(AppConfig config, ConversationTarget conversation) throws IOException {
+    SendState state = store.loadState();
+    PendingRetry existing = findPendingRetry(state, conversation.stateKey());
+    PendingRetry retry;
+    if (existing != null && DailyLimitDeferral.isDeferred(existing)) {
+      retry = existing;
+      DailyLimitDeferral.postpone(retry, now());
+    } else {
+      retry = DailyLimitDeferral.create(config, conversation, digest(config.getMessageText()), now());
+    }
+    upsertRetry(state, retry);
+    store.saveState(state);
+    return retry.getDueAt();
   }
 
   private void upsertRetry(SendState state, PendingRetry retry) {

@@ -354,17 +354,13 @@ function classifyMatches(items, target) {
     }))
     .filter((item) => item.name);
 
-  const exactMatches = mapped.filter((item) => normalizeForMatch(item.name) === normalizedTarget);
-  if (exactMatches.length) {
-    return { type: "exact", matches: exactMatches };
-  }
-
-  const containsMatches = mapped.filter((item) => normalizeForMatch(item.name).includes(normalizedTarget));
-  if (containsMatches.length) {
-    return { type: "contains", matches: containsMatches };
-  }
-
-  return { type: "none", matches: [] };
+  return {
+    exactMatches: mapped.filter((item) => normalizeForMatch(item.name) === normalizedTarget),
+    containsMatches: mapped.filter((item) => {
+      const normalizedName = normalizeForMatch(item.name);
+      return normalizedName !== normalizedTarget && normalizedName.includes(normalizedTarget);
+    })
+  };
 }
 
 function conversationKey(item, list) {
@@ -395,10 +391,12 @@ async function scanMatchingConversations(target, selectorTrace) {
   let lastScrollTop = -1;
   while (true) {
     const items = getClickableConversationItems(selectorTrace);
-    const matchState = classifyMatches(items, target);
-    const destination = matchState.type === "exact" ? exactMatches : containsMatches;
-    for (const match of matchState.matches) {
-      destination.set(conversationKey(match, list), match);
+    const matches = classifyMatches(items, target);
+    for (const match of matches.exactMatches) {
+      exactMatches.set(conversationKey(match, list), match);
+    }
+    for (const match of matches.containsMatches) {
+      containsMatches.set(conversationKey(match, list), match);
     }
 
     const maxScrollTop = Math.max(0, list.scrollHeight - list.clientHeight);
@@ -412,7 +410,7 @@ async function scanMatchingConversations(target, selectorTrace) {
     await sleep(500);
   }
 
-  const matches = exactMatches.size ? Array.from(exactMatches.values()) : Array.from(containsMatches.values());
+  const matches = [...exactMatches.values(), ...containsMatches.values()];
   return { ok: true, matches, selectorTrace };
 }
 

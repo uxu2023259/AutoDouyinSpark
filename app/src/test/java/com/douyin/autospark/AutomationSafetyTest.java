@@ -29,6 +29,10 @@ class AutomationSafetyTest {
       assertTrue(script.contains("verify-human-send"));
       assertTrue(script.contains("exactOutgoingMessageElements"));
       assertTrue(script.contains("conversation-items:actual-gridcell"));
+      assertTrue(script.contains("exactMatches: mapped.filter"));
+      assertTrue(script.contains("containsMatches: mapped.filter"));
+      assertTrue(script.contains("const matches = [...exactMatches.values(), ...containsMatches.values()]"));
+      assertFalse(script.contains("const matches = exactMatches.size ?"));
       assertTrue(script.contains("[class*='box-item-'][class*='is-me-']"));
       assertTrue(script.contains("[class*='text-item-message-']"));
       assertTrue(script.contains("messageIsPending"));
