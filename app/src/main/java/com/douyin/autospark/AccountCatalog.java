@@ -1,4 +1,4 @@
-package com.douyin.autospark;
+package awa.uxu.douyin.autospark;
 
 import java.util.ArrayList;
 import java.util.HashSet;

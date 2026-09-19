@@ -1,4 +1,4 @@
-package com.douyin.autospark;
+package awa.uxu.douyin.autospark;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;

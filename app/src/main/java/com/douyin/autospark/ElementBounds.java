@@ -1,4 +1,4 @@
-package com.douyin.autospark;
+package awa.uxu.douyin.autospark;
 
 public class ElementBounds {
   private double x;

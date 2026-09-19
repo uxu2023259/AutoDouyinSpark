@@ -178,7 +178,7 @@ if not exist "%JAVA_EXE%" (
   pause
   exit /b 1
 )
-start "" "%JAVA_EXE%" -Dfile.encoding=UTF-8 -cp "%APP_HOME%app\*" com.douyin.autospark.DouyinAutoSparkApp
+start "" "%JAVA_EXE%" -Dfile.encoding=UTF-8 -cp "%APP_HOME%app\*" awa.uxu.douyin.autospark.DouyinAutoSparkApp
 "@
   [System.IO.File]::WriteAllText((Join-Path $AppImagePath "$AppImageName.bat"), $launcher, [System.Text.UTF8Encoding]::new($false))
 
@@ -192,7 +192,7 @@ if not exist "%JAVA_EXE%" (
   pause
   exit /b 1
 )
-"%JAVA_EXE%" -Dfile.encoding=UTF-8 -cp "%APP_HOME%app\*" com.douyin.autospark.DouyinAutoSparkApp
+"%JAVA_EXE%" -Dfile.encoding=UTF-8 -cp "%APP_HOME%app\*" awa.uxu.douyin.autospark.DouyinAutoSparkApp
 "@
   [System.IO.File]::WriteAllText((Join-Path $AppImagePath "$AppImageName-控制台诊断.bat"), $consoleLauncher, [System.Text.UTF8Encoding]::new($false))
 }
@@ -289,7 +289,7 @@ $jpackageArgs = @(
   "--vendor", "hyx",
   "--input", $jpackageInput,
   "--main-jar", $mainJar,
-  "--main-class", "com.douyin.autospark.DouyinAutoSparkApp",
+  "--main-class", "awa.uxu.douyin.autospark.DouyinAutoSparkApp",
   "--dest", $jpackageRoot,
   "--java-options", "-Dfile.encoding=UTF-8"
 )

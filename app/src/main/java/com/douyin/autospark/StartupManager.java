@@ -1,4 +1,4 @@
-package com.douyin.autospark;
+package awa.uxu.douyin.autospark;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -39,7 +39,7 @@ public class StartupManager {
     }
     String classPath = System.getProperty("java.class.path", "");
     if (command.toLowerCase().endsWith("java.exe") || command.toLowerCase().endsWith("javaw.exe")) {
-      return "\"" + command + "\" -Dfile.encoding=UTF-8 -cp \"" + classPath + "\" com.douyin.autospark.DouyinAutoSparkApp";
+      return "\"" + command + "\" -Dfile.encoding=UTF-8 -cp \"" + classPath + "\" awa.uxu.douyin.autospark.DouyinAutoSparkApp";
     }
     return "\"" + command + "\"";
   }

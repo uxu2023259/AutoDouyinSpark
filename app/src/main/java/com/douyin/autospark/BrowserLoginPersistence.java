@@ -1,4 +1,4 @@
-package com.douyin.autospark;
+package awa.uxu.douyin.autospark;
 
 import com.microsoft.playwright.options.Cookie;
 

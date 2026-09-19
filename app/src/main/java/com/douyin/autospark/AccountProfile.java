@@ -1,4 +1,4 @@
-package com.douyin.autospark;
+package awa.uxu.douyin.autospark;
 
 import java.time.LocalDateTime;
 import java.util.Objects;

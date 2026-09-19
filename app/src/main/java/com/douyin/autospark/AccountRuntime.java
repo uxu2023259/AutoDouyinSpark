@@ -1,4 +1,4 @@
-package com.douyin.autospark;
+package awa.uxu.douyin.autospark;
 
 public final class AccountRuntime implements AutoCloseable {
   private final AccountProfile profile;

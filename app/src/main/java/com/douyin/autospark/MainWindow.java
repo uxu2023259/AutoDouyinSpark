@@ -1,4 +1,4 @@
-package com.douyin.autospark;
+package awa.uxu.douyin.autospark;
 
 import javax.swing.BorderFactory;
 import javax.swing.Box;

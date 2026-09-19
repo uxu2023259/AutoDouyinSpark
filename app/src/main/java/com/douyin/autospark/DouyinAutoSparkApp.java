@@ -1,4 +1,4 @@
-package com.douyin.autospark;
+package awa.uxu.douyin.autospark;
 
 import javax.swing.SwingUtilities;
 import javax.swing.UIManager;

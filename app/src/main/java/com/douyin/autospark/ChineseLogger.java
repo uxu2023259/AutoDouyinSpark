@@ -1,4 +1,4 @@
-package com.douyin.autospark;
+package awa.uxu.douyin.autospark;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
