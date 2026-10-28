@@ -14,6 +14,7 @@ import javax.swing.JLabel;
 import javax.swing.JList;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
+import javax.swing.JScrollBar;
 import javax.swing.JScrollPane;
 import javax.swing.JSpinner;
 import javax.swing.JSplitPane;
@@ -85,6 +86,7 @@ public class MainWindow extends JFrame {
   private final JSpinner humanRestMin = new JSpinner(new SpinnerNumberModel(45, 15, 3600, 5));
   private final JSpinner humanRestMax = new JSpinner(new SpinnerNumberModel(120, 15, 7200, 5));
   private final JTextArea logs = new JTextArea(20, 80);
+  private final JScrollPane logScrollPane = new JScrollPane(logs);
   private final Consumer<String> logListener = this::appendLog;
   private boolean selectingAccount;
 
@@ -308,14 +310,14 @@ public class MainWindow extends JFrame {
     logs.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 13));
     JPanel panel = new JPanel(new BorderLayout(0, 8));
     JPanel toolbar = new JPanel(new BorderLayout());
-    JLabel hint = new JLabel("统一日志会标注账号名称，便于排查并行任务。");
+    JLabel hint = new JLabel("窗口保留最近约 1000 行；完整日志按日期保存在本机。");
     hint.setForeground(SUBTLE_TEXT);
     JButton clear = new JButton("清空窗口日志");
     clear.addActionListener(_event -> logs.setText(""));
     toolbar.add(hint, BorderLayout.WEST);
     toolbar.add(clear, BorderLayout.EAST);
     panel.add(toolbar, BorderLayout.NORTH);
-    panel.add(new JScrollPane(logs), BorderLayout.CENTER);
+    panel.add(logScrollPane, BorderLayout.CENTER);
     return panel;
   }
 
@@ -615,8 +617,12 @@ public class MainWindow extends JFrame {
 
   private void appendLog(String line) {
     SwingUtilities.invokeLater(() -> {
-      logs.append(line + System.lineSeparator());
-      logs.setCaretPosition(logs.getDocument().getLength());
+      JScrollBar vertical = logScrollPane.getVerticalScrollBar();
+      boolean followLatest = vertical.getValue() + vertical.getVisibleAmount() >= vertical.getMaximum() - 2;
+      RecentLogBuffer.appendLine(logs, line);
+      if (followLatest) {
+        logs.setCaretPosition(logs.getDocument().getLength());
+      }
       status.setText("状态：" + line);
     });
   }
