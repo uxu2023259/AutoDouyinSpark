@@ -7,15 +7,6 @@ public class ConversationTarget {
   private String query = "";
   private String name = "";
   private String identity = "";
-  private int occurrence;
-  private boolean duplicateName;
-
-  public String stateKey() {
-    if (!identity.isBlank()) {
-      return "会话标识:" + identity;
-    }
-    return "会话名称:" + name + "#" + Math.max(0, occurrence);
-  }
 
   public String displayName() {
     return name.isBlank() ? query : name;
@@ -43,21 +34,5 @@ public class ConversationTarget {
 
   public void setIdentity(String identity) {
     this.identity = identity == null ? "" : identity;
-  }
-
-  public int getOccurrence() {
-    return occurrence;
-  }
-
-  public void setOccurrence(int occurrence) {
-    this.occurrence = Math.max(0, occurrence);
-  }
-
-  public boolean isDuplicateName() {
-    return duplicateName;
-  }
-
-  public void setDuplicateName(boolean duplicateName) {
-    this.duplicateName = duplicateName;
   }
 }

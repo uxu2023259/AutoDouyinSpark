@@ -53,7 +53,7 @@ public class TaskResult {
     result.errorCode = code;
     result.errorDetail = reason;
     result.reason = reason;
-    result.outcome = "RETRYABLE_FAILURE";
+    result.outcome = "FAILED";
     return result;
   }
 

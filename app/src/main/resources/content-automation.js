@@ -29,9 +29,7 @@ function matchesTarget(candidate, target) {
   if (!normalizedCandidate || !normalizedTarget) {
     return false;
   }
-  return normalizedCandidate === normalizedTarget
-    || normalizedCandidate.includes(normalizedTarget)
-    || normalizedTarget.includes(normalizedCandidate);
+  return normalizedCandidate === normalizedTarget;
 }
 
 function visible(element) {
@@ -69,7 +67,7 @@ function createFailure(errorCode, reason, extra = {}) {
     matchedConversationName: extra.matchedConversationName || "",
     selectorTrace: extra.selectorTrace || [],
     deliveryStatus: "",
-    outcome: extra.outcome || "RETRYABLE_FAILURE",
+    outcome: extra.outcome || "FAILED",
     attemptId: extra.attemptId || "",
     securityPrompt: extra.securityPrompt || ""
   };
@@ -354,13 +352,7 @@ function classifyMatches(items, target) {
     }))
     .filter((item) => item.name);
 
-  return {
-    exactMatches: mapped.filter((item) => normalizeForMatch(item.name) === normalizedTarget),
-    containsMatches: mapped.filter((item) => {
-      const normalizedName = normalizeForMatch(item.name);
-      return normalizedName !== normalizedTarget && normalizedName.includes(normalizedTarget);
-    })
-  };
+  return mapped.filter((item) => normalizeForMatch(item.name) === normalizedTarget);
 }
 
 function conversationKey(item, list) {
@@ -387,16 +379,12 @@ async function scanMatchingConversations(target, selectorTrace) {
   await sleep(300);
 
   const exactMatches = new Map();
-  const containsMatches = new Map();
   let lastScrollTop = -1;
   while (true) {
     const items = getClickableConversationItems(selectorTrace);
     const matches = classifyMatches(items, target);
-    for (const match of matches.exactMatches) {
+    for (const match of matches) {
       exactMatches.set(conversationKey(match, list), match);
-    }
-    for (const match of matches.containsMatches) {
-      containsMatches.set(conversationKey(match, list), match);
     }
 
     const maxScrollTop = Math.max(0, list.scrollHeight - list.clientHeight);
@@ -410,8 +398,7 @@ async function scanMatchingConversations(target, selectorTrace) {
     await sleep(500);
   }
 
-  const matches = [...exactMatches.values(), ...containsMatches.values()];
-  return { ok: true, matches, selectorTrace };
+  return { ok: true, matches: [...exactMatches.values()], selectorTrace };
 }
 
 async function discoverTargetConversations(target, selectorTrace) {
@@ -426,24 +413,18 @@ async function discoverTargetConversations(target, selectorTrace) {
     });
   }
 
-  const nameTotals = new Map();
-  for (const match of scan.matches) {
-    const nameKey = normalizeForMatch(match.name);
-    nameTotals.set(nameKey, (nameTotals.get(nameKey) || 0) + 1);
+  if (scan.matches.length > 1) {
+    return createFailure("TARGET_AMBIGUOUS", `找到 ${scan.matches.length} 个同名会话，无法确认指定用户：${target}`, {
+      phase: PHASES.LOCATING_TARGET,
+      selectorTrace
+    });
   }
-  const nameOccurrences = new Map();
-  const conversations = scan.matches.map((match) => {
-    const nameKey = normalizeForMatch(match.name);
-    const occurrence = nameOccurrences.get(nameKey) || 0;
-    nameOccurrences.set(nameKey, occurrence + 1);
-    return {
-      query: target,
-      name: match.name,
-      identity: match.identity,
-      occurrence,
-      duplicateName: nameTotals.get(nameKey) > 1
-    };
-  });
+
+  const conversations = scan.matches.map((match) => ({
+    query: target,
+    name: match.name,
+    identity: match.identity
+  }));
 
   return {
     ok: true,
@@ -456,7 +437,28 @@ async function discoverTargetConversations(target, selectorTrace) {
 async function findTargetConversation(conversation, selectorTrace) {
   const target = conversation.name || conversation.query;
   const expectedIdentity = conversation.identity || "";
-  const expectedOccurrence = Math.max(0, Number(conversation.occurrence) || 0);
+  const scan = await scanMatchingConversations(target, selectorTrace);
+  if (!scan.ok) return scan;
+  if (scan.matches.length > 1) {
+    return createFailure("TARGET_AMBIGUOUS", `找到 ${scan.matches.length} 个同名会话，无法确认指定用户：${target}`, {
+      phase: PHASES.LOCATING_TARGET,
+      selectorTrace
+    });
+  }
+  if (!scan.matches.length) {
+    return createFailure("TARGET_NOT_FOUND", `左侧列表未找到目标会话：${target}`, {
+      phase: PHASES.LOCATING_TARGET,
+      selectorTrace
+    });
+  }
+  const uniqueMatch = scan.matches[0];
+  if (expectedIdentity && uniqueMatch.identity !== expectedIdentity) {
+    return createFailure("TARGET_CHANGED", `目标用户“${target}”的会话标识已变化；未发送`, {
+      phase: PHASES.LOCATING_TARGET,
+      selectorTrace
+    });
+  }
+
   const list = await waitFor(() => findConversationList(selectorTrace), WAIT_TIMEOUT, 300);
   if (!list) {
     return createFailure("CONVERSATION_LIST_MISSING", "没有找到会话列表，页面可能尚未准备好", {
@@ -467,43 +469,21 @@ async function findTargetConversation(conversation, selectorTrace) {
 
   list.scrollTop = 0;
   await sleep(300);
-  const seenFallbackMatches = new Set();
-  let occurrence = 0;
   let lastScrollTop = -1;
   while (true) {
     const items = getClickableConversationItems(selectorTrace)
       .map((node) => ({ node, name: getConversationName(node), identity: getConversationIdentity(node) }))
       .filter((item) => item.name && normalizeForMatch(item.name) === normalizeForMatch(target));
     const identityMatch = expectedIdentity && items.find((item) => item.identity === expectedIdentity);
-    if (identityMatch) {
+    const match = identityMatch || (!expectedIdentity ? items[0] : null);
+    if (match) {
       return {
         ok: true,
         target,
-        node: identityMatch.node,
-        matchedConversationName: identityMatch.name,
-        duplicateName: Boolean(conversation.duplicateName),
+        node: match.node,
+        matchedConversationName: match.name,
         selectorTrace
       };
-    }
-    if (!expectedIdentity) {
-      for (const item of items) {
-        const key = conversationKey(item, list);
-        if (seenFallbackMatches.has(key)) {
-          continue;
-        }
-        seenFallbackMatches.add(key);
-        if (occurrence === expectedOccurrence) {
-          return {
-            ok: true,
-            target,
-            node: item.node,
-            matchedConversationName: item.name,
-            duplicateName: Boolean(conversation.duplicateName),
-            selectorTrace
-          };
-        }
-        occurrence += 1;
-      }
     }
 
     const maxScrollTop = Math.max(0, list.scrollHeight - list.clientHeight);
@@ -520,350 +500,13 @@ async function findTargetConversation(conversation, selectorTrace) {
   }
 }
 
-function dispatchMouseSequence(element) {
-  const rect = element.getBoundingClientRect();
-  const options = {
-    bubbles: true,
-    cancelable: true,
-    view: window,
-    button: 0,
-    buttons: 1,
-    clientX: rect.left + rect.width / 2,
-    clientY: rect.top + rect.height / 2
-  };
-  element.dispatchEvent(new MouseEvent("mouseover", options));
-  element.dispatchEvent(new MouseEvent("mouseenter", options));
-  if (typeof PointerEvent === "function") {
-    element.dispatchEvent(new PointerEvent("pointerdown", options));
-  }
-  element.dispatchEvent(new MouseEvent("mousedown", options));
-  if (typeof PointerEvent === "function") {
-    element.dispatchEvent(new PointerEvent("pointerup", options));
-  }
-  element.dispatchEvent(new MouseEvent("mouseup", options));
-  element.dispatchEvent(new MouseEvent("click", options));
-  element.dispatchEvent(new MouseEvent("dblclick", options));
-}
-
-function getClickableAncestor(element) {
-  let current = element;
-  while (current && current !== document.body) {
-    if (current.tagName === "BUTTON" || current.tagName === "A" || current.getAttribute("role") === "button" || current.getAttribute("role") === "row" || current.getAttribute("role") === "list-item") {
-      return current;
-    }
-    current = current.parentElement;
-  }
-  return element;
-}
-
-async function verifySwitch(target, selectorTrace) {
-  return waitFor(() => {
-    const headerName = getCurrentChatTarget(selectorTrace);
-    const selectedName = getSelectedConversationName(selectorTrace);
-    const headerMatched = matchesTarget(headerName, target);
-    const selectedMatched = matchesTarget(selectedName, target);
-    if (headerMatched || selectedMatched) {
-      return {
-        ok: true,
-        headerName,
-        selectedName,
-        signal: headerMatched && selectedMatched ? "header+selected" : headerMatched ? "header" : "selected"
-      };
-    }
-    return null;
-  }, 4500, 200);
-}
-
-function getConversationPanelSnapshot(selectorTrace) {
-  const headerName = getCurrentChatTarget(selectorTrace);
-  const selectedName = getSelectedConversationName(selectorTrace);
-  return {
-    headerName,
-    selectedName
-  };
-}
-
-async function verifySwitchFast(target, targetNode, beforeSnapshot, selectorTrace, requireNodeConfirmation) {
-  return waitFor(() => {
-    const current = getConversationPanelSnapshot(selectorTrace);
-    const headerMatched = matchesTarget(current.headerName, target);
-    const selectedMatched = matchesTarget(current.selectedName, target);
-    const headerChanged = Boolean(current.headerName) && normalize(current.headerName) !== normalize(beforeSnapshot.headerName);
-    const selectedChanged = Boolean(current.selectedName) && normalize(current.selectedName) !== normalize(beforeSnapshot.selectedName);
-    const targetNodeSelected = isSelectedConversation(targetNode);
-
-    const ordinaryConfirmation = headerMatched || selectedMatched || targetNodeSelected
-      || ((headerChanged || selectedChanged) && (headerMatched || selectedMatched || targetNodeSelected));
-    if ((requireNodeConfirmation && targetNodeSelected) || (!requireNodeConfirmation && ordinaryConfirmation)) {
-      return {
-        ok: true,
-        headerName: current.headerName,
-        selectedName: current.selectedName,
-        signal: headerMatched
-          ? "header-match"
-          : selectedMatched
-            ? "selected-match"
-            : "target-node-selected"
-      };
-    }
-    return null;
-  }, 1500, 100);
-}
-
-async function switchConversation(targetInfo, selectorTrace) {
-  const target = targetInfo.target;
-  const targetNode = targetInfo.node;
-  const nameNode = findConversationNameNode(targetNode);
-  const rect = targetNode.getBoundingClientRect();
-  const pointTarget = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
-  const clickTargets = dedupeElements([
-    targetNode,
-    nameNode,
-    getClickableAncestor(targetNode),
-    targetNode.querySelector("*"),
-    pointTarget
-  ]).filter(Boolean);
-
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    for (const node of clickTargets) {
-      const beforeSnapshot = getConversationPanelSnapshot(selectorTrace);
-      node.scrollIntoView({ block: "center" });
-      await sleep(150);
-      if (typeof node.focus === "function") {
-        node.focus();
-      }
-      dispatchMouseSequence(node);
-      if (typeof node.click === "function") {
-        node.click();
-      }
-
-      const switched = await verifySwitchFast(target, targetNode, beforeSnapshot, selectorTrace, targetInfo.duplicateName);
-      if (switched) {
-        return {
-          ok: true,
-          currentChatTarget: switched.headerName,
-          selectedConversation: switched.selectedName,
-          matchedConversationName: targetInfo.matchedConversationName,
-          selectorTrace
-        };
-      }
-    }
-    await sleep(300);
-  }
-
-  const switched = targetInfo.duplicateName ? null : await verifySwitch(target, selectorTrace);
-  if (switched) {
-    return {
-      ok: true,
-      currentChatTarget: switched.headerName,
-      selectedConversation: switched.selectedName,
-      matchedConversationName: targetInfo.matchedConversationName,
-      selectorTrace
-    };
-  }
-
-  return createFailure("CONVERSATION_SWITCH_UNCONFIRMED", `无法确认已切换到目标会话：${targetInfo.matchedConversationName}`, {
-    phase: PHASES.SWITCHING_TARGET,
-    matchedConversationName: targetInfo.matchedConversationName,
-    selectorTrace
-  });
-}
-
-function setCaretToEnd(element) {
-  const selection = window.getSelection();
-  if (!selection) {
-    return;
-  }
-  const range = document.createRange();
-  range.selectNodeContents(element);
-  range.collapse(false);
-  selection.removeAllRanges();
-  selection.addRange(range);
-}
-
-function writeEditorText(editor, text) {
-  editor.focus();
-  editor.dispatchEvent(new InputEvent("beforeinput", {
-    bubbles: true,
-    cancelable: true,
-    data: text,
-    inputType: "insertText"
-  }));
-
-  const selection = window.getSelection();
-  const range = document.createRange();
-  range.selectNodeContents(editor);
-  range.deleteContents();
-  const textNode = document.createTextNode(text);
-  range.insertNode(textNode);
-  setCaretToEnd(editor);
-
-  editor.dispatchEvent(new InputEvent("input", {
-    bubbles: true,
-    data: text,
-    inputType: "insertText"
-  }));
-  editor.dispatchEvent(new Event("change", { bubbles: true }));
-}
-
-function fallbackWriteEditorText(editor, text) {
-  editor.focus();
-  editor.innerHTML = "";
-  editor.appendChild(document.createTextNode(text));
-  setCaretToEnd(editor);
-  editor.dispatchEvent(new InputEvent("input", {
-    bubbles: true,
-    data: text,
-    inputType: "insertText"
-  }));
-  editor.dispatchEvent(new Event("change", { bubbles: true }));
-}
-
 function editorText(editor) {
   return normalize(editor.innerText || editor.textContent);
 }
 
-async function typeMessage(editor, messageText, target, matchedConversationName, selectorTrace) {
-  writeEditorText(editor, messageText);
-  await sleep(300);
-
-  if (editorText(editor) === normalize(messageText)) {
-    return { ok: true };
-  }
-
-  fallbackWriteEditorText(editor, messageText);
-  await sleep(300);
-
-  if (editorText(editor) === normalize(messageText)) {
-    return { ok: true };
-  }
-
-  return createFailure("EDITOR_WRITE_FAILED", "消息写入失败，输入框内容没有达到预期", {
-    phase: PHASES.TYPING_MESSAGE,
-    matchedConversationName,
-    selectorTrace
-  });
-}
-
-async function verifySendResult(editor, previousText) {
-  return waitFor(() => {
-    const current = editorText(editor);
-    if (!current) {
-      return { deliveryStatus: "confirmed" };
-    }
-    if (current !== previousText) {
-      return { deliveryStatus: "confirmed" };
-    }
-    return null;
-  }, 2000, 200);
-}
-
-async function runChatSend(settings, conversation) {
-  const selectorTrace = [];
-  const target = conversation?.name || conversation?.query || "";
-
-  if (!target) {
-    return createFailure("TARGET_EMPTY", "目标会话关键词为空，未执行", {
-      phase: PHASES.LOCATING_TARGET,
-      selectorTrace
-    });
-  }
-
-  const probe = await waitForPageReady(selectorTrace);
-  if (!probe.ok) {
-    return probe;
-  }
-
-  const targetInfo = await findTargetConversation(conversation, selectorTrace);
-  if (!targetInfo.ok) {
-    return targetInfo;
-  }
-
-  const switchResult = await switchConversation(targetInfo, selectorTrace);
-  if (!switchResult.ok) {
-    return switchResult;
-  }
-
-  const currentChatTarget = getCurrentChatTarget(selectorTrace) || switchResult.currentChatTarget || targetInfo.matchedConversationName;
-  const selectedConversation = getSelectedConversationName(selectorTrace) || switchResult.selectedConversation || targetInfo.matchedConversationName;
-
-  const editor = await waitFor(() => findEditor(selectorTrace), WAIT_TIMEOUT, 250);
-  if (!editor) {
-    return createFailure("EDITOR_NOT_FOUND", "没有找到输入框，页面结构可能已变化", {
-      phase: PHASES.TYPING_MESSAGE,
-      currentChatTarget,
-      selectedConversation,
-      matchedConversationName: targetInfo.matchedConversationName,
-      selectorTrace
-    });
-  }
-
-  const sendButton = await waitFor(() => findSendButton(selectorTrace), WAIT_TIMEOUT, 250);
-  if (!sendButton) {
-    return createFailure("SEND_BUTTON_NOT_FOUND", "没有找到发送按钮，页面结构可能已变化", {
-      phase: PHASES.TYPING_MESSAGE,
-      currentChatTarget,
-      selectedConversation,
-      matchedConversationName: targetInfo.matchedConversationName,
-      selectorTrace
-    });
-  }
-
-  const typeResult = await typeMessage(editor, settings.messageText || "续火花啦，记得回我一下~", target, targetInfo.matchedConversationName, selectorTrace);
-  if (!typeResult.ok) {
-    return typeResult;
-  }
-
-  const finalChatTarget = getCurrentChatTarget(selectorTrace) || currentChatTarget || targetInfo.matchedConversationName;
-  const beforeSendText = editorText(editor);
-  if (sendButton.disabled || sendButton.getAttribute("aria-disabled") === "true") {
-    return createFailure("SEND_BUTTON_DISABLED", "发送按钮当前不可用，未执行发送", {
-      phase: PHASES.SENDING_MESSAGE,
-      currentChatTarget: finalChatTarget,
-      matchedConversationName: targetInfo.matchedConversationName,
-      selectorTrace
-    });
-  }
-  return createFailure("LEGACY_SEND_DISABLED", "旧版脚本发送入口已停用，请使用 Playwright 仿人操作流程", {
-    phase: PHASES.SENDING_MESSAGE,
-    currentChatTarget: finalChatTarget,
-    matchedConversationName: targetInfo.matchedConversationName,
-    selectorTrace
-  });
-
-  const sendResult = await verifySendResult(editor, beforeSendText);
-  if (!sendResult) {
-    return {
-      ok: true,
-      success: true,
-      skipped: false,
-      phase: PHASES.COMPLETED,
-      deliveryStatus: "uncertain",
-      reason: "发送动作已触发，但暂时无法确认发送结果",
-      currentChatTarget: finalChatTarget,
-      selectedConversation: getSelectedConversationName(selectorTrace),
-      matchedConversationName: targetInfo.matchedConversationName,
-      selectorTrace
-    };
-  }
-
-  return {
-    ok: true,
-    success: true,
-    skipped: false,
-    phase: PHASES.COMPLETED,
-    deliveryStatus: "confirmed",
-    reason: `已向 ${target} 发送消息`,
-    currentChatTarget: finalChatTarget,
-    selectedConversation: getSelectedConversationName(selectorTrace),
-    matchedConversationName: targetInfo.matchedConversationName,
-    selectorTrace
-  };
-}
-
-function humanSessions() {
-  window.__douyinAutoSparkHumanSessions = window.__douyinAutoSparkHumanSessions || {};
-  return window.__douyinAutoSparkHumanSessions;
+function sendSessions() {
+  window.__douyinAutoSparkSendSessions = window.__douyinAutoSparkSendSessions || {};
+  return window.__douyinAutoSparkSendSessions;
 }
 
 function elementBounds(element) {
@@ -967,7 +610,7 @@ function captureMessageEvidence(messageText) {
   };
 }
 
-async function prepareHumanTarget(input) {
+async function prepareTarget(input) {
   const selectorTrace = [];
   const attemptId = input.attemptId || `尝试-${Date.now()}`;
   const probe = await waitForPageReady(selectorTrace);
@@ -988,7 +631,7 @@ async function prepareHumanTarget(input) {
       selectorTrace
     });
   }
-  humanSessions()[attemptId] = {
+  sendSessions()[attemptId] = {
     targetInfo,
     conversation: input.target || {},
     messageText: input.settings?.messageText || "",
@@ -1008,11 +651,11 @@ async function prepareHumanTarget(input) {
   };
 }
 
-async function verifyHumanSwitch(input) {
+async function verifyTargetSwitch(input) {
   const attemptId = input.attemptId || "";
-  const session = humanSessions()[attemptId];
+  const session = sendSessions()[attemptId];
   if (!session) {
-    return createFailure("HUMAN_SESSION_MISSING", "仿人操作会话已失效", { attemptId });
+    return createFailure("SEND_SESSION_MISSING", "当前发送操作已失效", { attemptId });
   }
   const selectorTrace = session.selectorTrace;
   const targetInfo = session.targetInfo;
@@ -1029,9 +672,7 @@ async function verifyHumanSwitch(input) {
       && normalizeForMatch(getConversationName(selectedItem)) === normalizeForMatch(target)
       && Math.abs(selectedBounds.y - session.actionBounds.y) <= Math.max(selectedBounds.height, session.actionBounds.height) * 1.5;
     const ordinaryConfirmed = matchesTarget(headerName, target) || matchesTarget(selectedName, target);
-    const confirmed = targetInfo.duplicateName
-      ? identityConfirmed || (!session.conversation.identity && sameVisualRow)
-      : identityConfirmed || sameVisualRow || ordinaryConfirmed;
+    const confirmed = identityConfirmed || sameVisualRow || ordinaryConfirmed;
     return confirmed ? { headerName, selectedName } : null;
   }, WAIT_TIMEOUT, 250);
   if (!switched) {
@@ -1094,9 +735,9 @@ async function verifyHumanSwitch(input) {
   };
 }
 
-function validateHumanInput(input) {
+function validateMessageInput(input) {
   const attemptId = input.attemptId || "";
-  const session = humanSessions()[attemptId];
+  const session = sendSessions()[attemptId];
   const editor = session ? findEditor(session.selectorTrace) : null;
   if (!session || !editor || editorText(editor) !== normalize(session.messageText)) {
     return createFailure("EDITOR_WRITE_FAILED", "逐字输入后输入框内容与预期不一致", {
@@ -1134,11 +775,11 @@ function validateHumanInput(input) {
   };
 }
 
-async function verifyHumanSend(input) {
+async function verifyMessageSend(input) {
   const attemptId = input.attemptId || "";
-  const session = humanSessions()[attemptId];
+  const session = sendSessions()[attemptId];
   if (!session) {
-    return createFailure("HUMAN_SESSION_MISSING", "发送后仿人操作会话已失效", { attemptId });
+    return createFailure("SEND_SESSION_MISSING", "发送后的核验上下文已失效", { attemptId });
   }
   const clickedAtEpochMillis = Number(input.clickedAtEpochMillis) || Date.now();
   const observed = await waitFor(() => {
@@ -1232,51 +873,6 @@ async function verifyHumanSend(input) {
   };
 }
 
-async function reconcileHumanMessage(input) {
-  const attemptId = input.attemptId || "";
-  const session = humanSessions()[attemptId];
-  if (!session) {
-    return createFailure("HUMAN_SESSION_MISSING", "结果核验会话已失效", { attemptId });
-  }
-  const evidence = captureMessageEvidence(input.retry?.messageText || session.messageText);
-  const baseline = input.retry?.baselineFingerprints || [];
-  const deliverableElements = evidence.deliverableElements;
-  const deliverableFingerprints = evidence.deliverableFingerprints;
-  const hasNewFingerprint = deliverableFingerprints.some((fingerprint) => !baseline.includes(fingerprint));
-  const countIncreased = deliverableElements.length > Number(input.retry?.baselineMessageCount || 0);
-  const clickedAtEpochMillis = Number(input.retry?.clickedAtEpochMillis) || 0;
-  const baselineTimestamps = input.retry?.baselineMessageTimestamps || [];
-  const hasRecentDeliverable = clickedAtEpochMillis > 0
-    && evidence.deliverableTimestamps.some((timestamp) =>
-      timestamp >= clickedAtEpochMillis - 10000 && !baselineTimestamps.includes(timestamp));
-  if (hasNewFingerprint || countIncreased || hasRecentDeliverable) {
-    return {
-      ok: true,
-      success: true,
-      skipped: false,
-      outcome: "CONFIRMED",
-      deliveryStatus: "confirmed",
-      reason: "重试前核验到原发送消息已经存在",
-      attemptId,
-      observedMessageCount: evidence.count,
-      observedFingerprints: evidence.fingerprints,
-      matchedConversationName: session.targetInfo.matchedConversationName
-    };
-  }
-  return {
-    ok: true,
-    success: false,
-    skipped: false,
-    outcome: "NOT_CONFIRMED",
-    deliveryStatus: "",
-    reason: "没有核验到原发送消息",
-    attemptId,
-    observedMessageCount: evidence.count,
-    observedFingerprints: evidence.fingerprints,
-    matchedConversationName: session.targetInfo.matchedConversationName
-  };
-}
-
 async function runDouyinAutoSpark(input) {
   if (input.action === "discover") {
     const selectorTrace = [];
@@ -1286,20 +882,17 @@ async function runDouyinAutoSpark(input) {
     }
     return await discoverTargetConversations(input.target || "", selectorTrace);
   }
-  if (input.action === "prepare-human-target") {
-    return await prepareHumanTarget(input);
+  if (input.action === "prepare-target") {
+    return await prepareTarget(input);
   }
-  if (input.action === "verify-human-switch") {
-    return await verifyHumanSwitch(input);
+  if (input.action === "verify-target-switch") {
+    return await verifyTargetSwitch(input);
   }
-  if (input.action === "validate-human-input") {
-    return validateHumanInput(input);
+  if (input.action === "validate-message-input") {
+    return validateMessageInput(input);
   }
-  if (input.action === "verify-human-send") {
-    return await verifyHumanSend(input);
-  }
-  if (input.action === "reconcile-human-message") {
-    return await reconcileHumanMessage(input);
+  if (input.action === "verify-message-send") {
+    return await verifyMessageSend(input);
   }
   return createFailure("ACTION_UNSUPPORTED", "未识别的页面自动化动作，未执行发送");
 }

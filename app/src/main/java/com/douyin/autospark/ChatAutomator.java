@@ -3,11 +3,9 @@ package awa.uxu.douyin.autospark;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.microsoft.playwright.BrowserContext;
 import com.microsoft.playwright.BrowserType;
-import com.microsoft.playwright.Locator;
 import com.microsoft.playwright.Page;
 import com.microsoft.playwright.Playwright;
 import com.microsoft.playwright.Response;
-import com.microsoft.playwright.options.BoundingBox;
 import com.microsoft.playwright.options.LoadState;
 import com.microsoft.playwright.options.WaitUntilState;
 
@@ -22,7 +20,6 @@ import java.time.format.DateTimeFormatter;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Random;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
@@ -34,7 +31,6 @@ public class ChatAutomator implements AutoCloseable {
   private final AccountPaths paths;
   private final ChineseLogger logger;
   private final ObjectMapper mapper = new ObjectMapper();
-  private final Random random = new Random();
   private Playwright playwright;
   private BrowserContext context;
   private Page page;
@@ -66,7 +62,6 @@ public class ChatAutomator implements AutoCloseable {
   public synchronized ConversationDiscoveryResult discoverConversations(AppConfig config, String target, String taskId) {
     try {
       Page current = ensureChatPage(shouldRunHeadless(config));
-      humanScrollProbe(current, config);
       Map<String, Object> input = new HashMap<>();
       input.put("action", "discover");
       input.put("target", target);
@@ -99,31 +94,31 @@ public class ChatAutomator implements AutoCloseable {
     try {
       Page current = ensureChatPage(shouldRunHeadless(config));
       stage = "定位目标";
-      Map<String, Object> input = humanInput("prepare-human-target", config, conversation, taskId, attemptId);
+      Map<String, Object> input = automationInput("prepare-target", config, conversation, taskId, attemptId);
       TaskResult prepared = evaluateTask(current, input);
       if (!prepared.isOk()) return finishResult(target, prepared);
       if (!usable(prepared.getActionBounds())) {
         return finishResult(target, TaskResult.failed(target, "TARGET_BOUNDS_MISSING", "目标会话当前不可见，未执行点击"));
       }
       stage = "点击会话";
-      humanClick(current, prepared.getActionBounds(), config);
+      clickAtBounds(current, prepared.getActionBounds());
 
       stage = "确认会话";
-      input.put("action", "verify-human-switch");
+      input.put("action", "verify-target-switch");
       TaskResult ready = evaluateTask(current, input);
       if (!ready.isOk() && "CONVERSATION_SWITCH_UNCONFIRMED".equals(ready.getErrorCode())) {
         logger.warn("目标 " + target + " 首次点击后未确认切换，正在重新扫描网页会话列表并再点击一次；尚未执行发送。");
         stage = "重新定位目标";
-        input.put("action", "prepare-human-target");
+        input.put("action", "prepare-target");
         TaskResult preparedAgain = evaluateTask(current, input);
         if (!preparedAgain.isOk()) return finishResult(target, preparedAgain);
         if (!usable(preparedAgain.getActionBounds())) {
           return finishResult(target, TaskResult.failed(target, "TARGET_BOUNDS_MISSING", "重新定位后目标会话仍不可见，未执行发送"));
         }
         stage = "再次点击会话";
-        humanClick(current, preparedAgain.getActionBounds(), config);
+        clickAtBounds(current, preparedAgain.getActionBounds());
         stage = "再次确认会话";
-        input.put("action", "verify-human-switch");
+        input.put("action", "verify-target-switch");
         ready = evaluateTask(current, input);
       }
       if (!ready.isOk()) return finishResult(target, ready);
@@ -132,13 +127,13 @@ public class ChatAutomator implements AutoCloseable {
         return finishResult(target, TaskResult.failed(target, "EDITOR_BOUNDS_MISSING", "输入框当前不可见，未执行输入"));
       }
       stage = "输入消息";
-      humanClick(current, ready.getEditorBounds(), config);
+      clickAtBounds(current, ready.getEditorBounds());
       current.keyboard().press("Control+A");
       current.keyboard().press("Backspace");
-      humanType(current, config.getMessageText(), config);
+      insertMessageText(current, config.getMessageText());
 
       stage = "核验输入";
-      input.put("action", "validate-human-input");
+      input.put("action", "validate-message-input");
       TaskResult validated = evaluateTask(current, input);
       if (!validated.isOk()) return finishResult(target, validated);
       if (validated.isSendButtonDisabled()) {
@@ -163,9 +158,9 @@ public class ChatAutomator implements AutoCloseable {
         stage = "点击发送";
         clickedAtEpochMillis = System.currentTimeMillis();
         sendAttempted = true;
-        humanClick(current, validated.getSendButtonBounds(), config);
+        clickAtBounds(current, validated.getSendButtonBounds());
         stage = "确认发送结果";
-        input.put("action", "verify-human-send");
+        input.put("action", "verify-message-send");
         input.put("clickedAtEpochMillis", (double) clickedAtEpochMillis);
         result = evaluateTask(current, input);
       } finally {
@@ -173,7 +168,6 @@ public class ChatAutomator implements AutoCloseable {
       }
       result.setApiAcknowledged(apiAcknowledged.get());
       result.setTarget(target);
-      sleep(randomBetween(2000, 5000));
       return finishResult(target, result);
     } catch (BrowserProfileInUseException error) {
       throw error;
@@ -188,7 +182,7 @@ public class ChatAutomator implements AutoCloseable {
       }
       if (sendAttempted) {
         return uncertainAfterSend(target, attemptId, clickedAtEpochMillis, baseline, apiAcknowledged.get(),
-            "发送动作已触发，但“" + stage + "”阶段异常，已转入延迟核验，禁止立即重发");
+            "发送动作已触发，但“" + stage + "”阶段异常；结果不确定，今天不自动重试以避免重复发送");
       }
       return TaskResult.failed(target,
           isControlConnectionFailure(error) ? "CONTROL_CONNECTION_LOST" : "AUTOMATION_STAGE_EXCEPTION",
@@ -196,48 +190,7 @@ public class ChatAutomator implements AutoCloseable {
     }
   }
 
-  public synchronized TaskResult reconcileMessage(
-      AppConfig config, ConversationTarget conversation, PendingRetry retry, String taskId) {
-    String target = conversation.displayName();
-    String stage = "准备浏览器";
-    try {
-      Page current = ensureChatPage(shouldRunHeadless(config));
-      String attemptId = "核验-" + UUID.randomUUID();
-      stage = "定位核验目标";
-      Map<String, Object> input = humanInput("prepare-human-target", config, conversation, taskId, attemptId);
-      input.put("settings", Map.of("messageText", retry.getMessageText()));
-      TaskResult prepared = evaluateTask(current, input);
-      if (!prepared.isOk()) return finishResult(target, prepared);
-      if (!usable(prepared.getActionBounds())) {
-        return finishResult(target, TaskResult.failed(target, "TARGET_BOUNDS_MISSING", "结果核验时目标会话当前不可见"));
-      }
-      stage = "点击核验会话";
-      humanClick(current, prepared.getActionBounds(), config);
-      stage = "确认核验会话";
-      input.put("action", "verify-human-switch");
-      TaskResult ready = evaluateTask(current, input);
-      if (!ready.isOk()) return finishResult(target, ready);
-      stage = "核验原消息";
-      input.put("action", "reconcile-human-message");
-      input.put("retry", retryEvidence(retry));
-      TaskResult result = evaluateTask(current, input);
-      result.setTarget(target);
-      return finishResult(target, result);
-    } catch (BrowserProfileInUseException error) {
-      throw error;
-    } catch (RuntimeException error) {
-      String summary = summarizeAutomationFailure(error);
-      logger.error("结果核验在“" + stage + "”阶段发生异常：" + diagnosticDetail(stage, error));
-      if (isControlConnectionFailure(error)) {
-        invalidateBrowser("核验时浏览器控制连接已经关闭，下次任务将自动重建浏览器。", error);
-      } else {
-        logger.warn("结果核验异常未证明浏览器连接已断开，已保留当前浏览器和标签页。原因：" + summary);
-      }
-      return TaskResult.failed(target, "RECONCILIATION_EXCEPTION", "结果核验在“" + stage + "”阶段未完成：" + summary);
-    }
-  }
-
-  private Map<String, Object> humanInput(
+  private Map<String, Object> automationInput(
       String action, AppConfig config, ConversationTarget conversation, String taskId, String attemptId) {
     Map<String, Object> input = new HashMap<>();
     input.put("action", action);
@@ -245,25 +198,10 @@ public class ChatAutomator implements AutoCloseable {
     input.put("target", Map.of(
         "query", conversation.getQuery(),
         "name", conversation.getName(),
-        "identity", conversation.getIdentity(),
-        "occurrence", conversation.getOccurrence(),
-        "duplicateName", conversation.isDuplicateName()));
+        "identity", conversation.getIdentity()));
     input.put("taskId", taskId);
     input.put("attemptId", attemptId);
     return input;
-  }
-
-  private Map<String, Object> retryEvidence(PendingRetry retry) {
-    Map<String, Object> evidence = new HashMap<>();
-    evidence.put("messageText", retry.getMessageText());
-    evidence.put("baselineMessageCount", retry.getBaselineMessageCount());
-    evidence.put("baselineFingerprints", retry.getBaselineFingerprints());
-    evidence.put("baselineMessageTimestamps", retry.getBaselineMessageTimestamps().stream()
-        .filter(java.util.Objects::nonNull)
-        .map(Long::doubleValue)
-        .toList());
-    evidence.put("clickedAtEpochMillis", (double) retry.getClickedAtEpochMillis());
-    return evidence;
   }
 
   private TaskResult evaluateTask(Page current, Map<String, Object> input) {
@@ -280,29 +218,11 @@ public class ChatAutomator implements AutoCloseable {
     return result;
   }
 
-  private void humanClick(Page current, ElementBounds bounds, AppConfig config) {
+  private void clickAtBounds(Page current, ElementBounds bounds) {
     if (!usable(bounds)) {
       throw new IllegalArgumentException("页面返回的操作坐标不可用");
     }
-    double endX = bounds.getX() + bounds.getWidth() * (0.35 + random.nextDouble() * 0.3);
-    double endY = bounds.getY() + bounds.getHeight() * (0.35 + random.nextDouble() * 0.3);
-    double startX = Math.max(4, endX + randomBetween(-240, 240));
-    double startY = Math.max(4, endY + randomBetween(-160, 160));
-    double controlX = (startX + endX) / 2 + randomBetween(-80, 80);
-    double controlY = (startY + endY) / 2 + randomBetween(-50, 50);
-    int steps = randomBetween(9, 18);
-    for (int step = 1; step <= steps; step++) {
-      double t = step / (double) steps;
-      double x = (1 - t) * (1 - t) * startX + 2 * (1 - t) * t * controlX + t * t * endX;
-      double y = (1 - t) * (1 - t) * startY + 2 * (1 - t) * t * controlY + t * t * endY;
-      current.mouse().move(x, y);
-      sleep(randomBetween(8, 22));
-    }
-    sleep(actionDelay(config));
-    current.mouse().down();
-    sleep(randomBetween(70, 180));
-    current.mouse().up();
-    sleep(actionDelay(config));
+    current.mouse().click(bounds.getX() + bounds.getWidth() / 2, bounds.getY() + bounds.getHeight() / 2);
   }
 
   private boolean usable(ElementBounds bounds) {
@@ -333,54 +253,8 @@ public class ChatAutomator implements AutoCloseable {
     return result;
   }
 
-  private void humanType(Page current, String text, AppConfig config) {
-    text.codePoints().forEach(codePoint -> {
-      String character = new String(Character.toChars(codePoint));
-      current.keyboard().insertText(character);
-      sleep(typingDelay(config));
-      if ("，。！？、,.!?".contains(character)) sleep(randomBetween(250, 700));
-    });
-  }
-
-  private void humanScrollProbe(Page current, AppConfig config) {
-    Locator candidates = current.locator("[role='grid'], [role='list'], .ReactVirtualized__Grid");
-    for (int index = 0; index < Math.min(6, candidates.count()); index++) {
-      BoundingBox box = candidates.nth(index).boundingBox();
-      if (box == null || box.height < 100 || box.x > 700) continue;
-      current.mouse().move(box.x + box.width * 0.6, box.y + box.height * 0.55);
-      int steps = randomBetween(2, 4);
-      for (int step = 0; step < steps; step++) {
-        current.mouse().wheel(0, randomBetween(90, 220));
-        sleep(randomBetween(140, 420));
-      }
-      current.mouse().wheel(0, -randomBetween(35, 90));
-      sleep(actionDelay(config));
-      return;
-    }
-  }
-
-  private int actionDelay(AppConfig config) {
-    return "CUSTOM".equals(config.getHumanizationPreset())
-        ? randomBetween(config.getHumanActionDelayMinMillis(), config.getHumanActionDelayMaxMillis())
-        : randomBetween(350, 1200);
-  }
-
-  private int typingDelay(AppConfig config) {
-    return "CUSTOM".equals(config.getHumanizationPreset())
-        ? randomBetween(config.getHumanTypingDelayMinMillis(), config.getHumanTypingDelayMaxMillis())
-        : randomBetween(80, 220);
-  }
-
-  private int randomBetween(int min, int max) {
-    return max <= min ? min : min + random.nextInt(max - min + 1);
-  }
-
-  private void sleep(long milliseconds) {
-    try {
-      Thread.sleep(milliseconds);
-    } catch (InterruptedException error) {
-      Thread.currentThread().interrupt();
-    }
+  private void insertMessageText(Page current, String text) {
+    current.keyboard().insertText(text);
   }
 
   private boolean shouldRunHeadless(AppConfig config) {
@@ -483,8 +357,7 @@ public class ChatAutomator implements AutoCloseable {
         .setArgs(List.of(
             "--disable-background-timer-throttling",
             "--disable-backgrounding-occluded-windows",
-            "--disable-renderer-backgrounding",
-            "--disable-blink-features=AutomationControlled"));
+            "--disable-renderer-backgrounding"));
     Path bundledChrome = findBundledChrome();
     if (bundledChrome == null) {
       throw new IllegalStateException("未找到程序内置 Chromium 浏览器文件 chrome.exe，请完整解压程序包后再运行。");
@@ -549,7 +422,7 @@ public class ChatAutomator implements AutoCloseable {
       return "浏览器页面或控制连接已关闭，程序将在下次任务中自动重建。";
     }
     if (message.contains("Timeout")) {
-      return "页面操作等待超时，已保留当前浏览器并等待后续核验或重试。";
+      return "页面操作等待超时，已保留当前浏览器；本日不会自动重试该用户。";
     }
     return "页面自动化操作未完成，已保留当前浏览器并等待后续处理。";
   }

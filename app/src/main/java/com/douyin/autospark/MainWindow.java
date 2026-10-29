@@ -8,7 +8,6 @@ import javax.swing.DefaultListModel;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
 import javax.swing.JComponent;
-import javax.swing.JComboBox;
 import javax.swing.JFrame;
 import javax.swing.JLabel;
 import javax.swing.JList;
@@ -16,13 +15,11 @@ import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JScrollBar;
 import javax.swing.JScrollPane;
-import javax.swing.JSpinner;
 import javax.swing.JSplitPane;
 import javax.swing.JTabbedPane;
 import javax.swing.JTextArea;
 import javax.swing.JTextField;
 import javax.swing.ListSelectionModel;
-import javax.swing.SpinnerNumberModel;
 import javax.swing.SwingUtilities;
 import javax.swing.Timer;
 import javax.swing.WindowConstants;
@@ -62,29 +59,13 @@ public class MainWindow extends JFrame {
   private final JLabel status = new JLabel("状态：正在初始化");
   private final JLabel runtimeStatus = new JLabel("运行状态：读取中");
   private final JLabel saveStatus = new JLabel("配置修改后请保存");
-  private final JCheckBox enabled = new JCheckBox("启用当前账号自动执行");
+  private final JCheckBox enabled = new JCheckBox("启用每日自动发送");
   private final JCheckBox headlessMode = new JCheckBox("服务器无界面模式（首次登录后启用）");
   private final JCheckBox startWithWindows = new JCheckBox("Windows 登录后自动启动整个程序");
-  private final JCheckBox intervalModeEnabled = new JCheckBox("启用间隔模式");
-  private final JSpinner intervalMinutes = new JSpinner(new SpinnerNumberModel(30, 1, 1440, 1));
-  private final JCheckBox fixedModeEnabled = new JCheckBox("启用定时模式");
-  private final JTextArea fixedTimes = new JTextArea(3, 14);
+  private final JTextField dailyTime = new JTextField("16:00", 8);
   private final JTextArea targets = new JTextArea(8, 28);
   private final JTextArea messageText = new JTextArea(5, 28);
-  private final JSpinner dailyLimit = new JSpinner(new SpinnerNumberModel(20, 1, 500, 1));
-  private final JSpinner cooldownMinutes = new JSpinner(new SpinnerNumberModel(60, 0, 10080, 1));
-  private final JSpinner retryCount = new JSpinner(new SpinnerNumberModel(1, 0, 10, 1));
-  private final JSpinner retryDelayMinutes = new JSpinner(new SpinnerNumberModel(60, 1, 1440, 1));
-  private final JComboBox<String> humanizationPreset = new JComboBox<>(new String[]{"安全预设", "自定义"});
-  private final JSpinner humanActionMin = new JSpinner(new SpinnerNumberModel(350, 200, 10000, 50));
-  private final JSpinner humanActionMax = new JSpinner(new SpinnerNumberModel(1200, 200, 20000, 50));
-  private final JSpinner humanTypingMin = new JSpinner(new SpinnerNumberModel(80, 40, 2000, 10));
-  private final JSpinner humanTypingMax = new JSpinner(new SpinnerNumberModel(220, 40, 3000, 10));
-  private final JSpinner humanTargetMin = new JSpinner(new SpinnerNumberModel(8, 3, 600, 1));
-  private final JSpinner humanTargetMax = new JSpinner(new SpinnerNumberModel(20, 3, 1200, 1));
-  private final JSpinner humanBatchSize = new JSpinner(new SpinnerNumberModel(5, 1, 100, 1));
-  private final JSpinner humanRestMin = new JSpinner(new SpinnerNumberModel(45, 15, 3600, 5));
-  private final JSpinner humanRestMax = new JSpinner(new SpinnerNumberModel(120, 15, 7200, 5));
+  private final JButton resumeAutomatic = new JButton("解除人工暂停");
   private final JTextArea logs = new JTextArea(20, 80);
   private final JScrollPane logScrollPane = new JScrollPane(logs);
   private final Consumer<String> logListener = this::appendLog;
@@ -143,13 +124,14 @@ public class MainWindow extends JFrame {
 
     JPanel actions = new JPanel();
     JButton save = primaryButton("保存当前账号");
-    JButton run = new JButton("立即执行");
     JButton login = new JButton("打开登录/聊天页");
     save.addActionListener(_event -> saveSelectedAccount());
-    run.addActionListener(_event -> selectedRuntime().runner().runNow());
     login.addActionListener(_event -> selectedRuntime().runner().openBrowserForLogin());
+    resumeAutomatic.setEnabled(false);
+    resumeAutomatic.setToolTipText("仅解除安全暂停，不会立即发送；剩余用户仍由每日计划处理。");
+    resumeAutomatic.addActionListener(_event -> resumeSelectedAccount());
     actions.add(login);
-    actions.add(run);
+    actions.add(resumeAutomatic);
     actions.add(save);
     header.add(actions, BorderLayout.EAST);
     return header;
@@ -218,35 +200,10 @@ public class MainWindow extends JFrame {
     JPanel form = new JPanel(new GridBagLayout());
     form.setBorder(BorderFactory.createEmptyBorder(18, 18, 24, 18));
     int row = 0;
-    addWideRow(form, row++, "账号开关", enabled, "关闭后仅暂停当前账号，不影响其他账号。");
-    addWideRow(form, row++, "目标好友", scrollArea(targets), "每行一个名称或关键词；匹配到多个会话时会逐一全部发送，并自动去重。");
-    addWideRow(form, row++, "续火花内容", scrollArea(messageText), "发送前会再次确认当前聊天对象。");
-    JPanel intervalSchedule = new JPanel(new GridLayout(1, 2, 16, 0));
-    intervalSchedule.add(fieldGroup("模式开关", intervalModeEnabled));
-    intervalSchedule.add(fieldGroup("完成后间隔（分钟）", intervalMinutes));
-    addWideRow(form, row++, "间隔模式", intervalSchedule, "从上一轮完成后开始计时，到点后随机延迟 0–5 分钟启动。");
-    JPanel fixedSchedule = new JPanel(new GridLayout(1, 2, 16, 0));
-    fixedSchedule.add(fieldGroup("模式开关", fixedModeEnabled));
-    fixedSchedule.add(fieldGroup("每日时间点（每行一个 HH:mm）", new JScrollPane(fixedTimes)));
-    addWideRow(form, row++, "定时模式", fixedSchedule, "支持多个每日时间点；恢复运行时仅补当天最近一次错过的定时。");
-    JPanel limits = new JPanel(new GridLayout(1, 2, 16, 0));
-    limits.add(fieldGroup("每日上限", dailyLimit));
-    limits.add(fieldGroup("好友冷却（分钟）", cooldownMinutes));
-    addWideRow(form, row++, "安全限制", limits, "限制与计数仅作用于当前账号；程序主动跳过不计为失败。");
-    JPanel retry = new JPanel(new GridLayout(1, 2, 16, 0));
-    retry.add(fieldGroup("最多额外重试次数", retryCount));
-    retry.add(fieldGroup("重试间隔（分钟）", retryDelayMinutes));
-    addWideRow(form, row++, "失败重试", retry, "仅重试失败会话；结果不确定时先核验消息，再决定是否发送。");
-    JPanel humanBasic = new JPanel(new GridLayout(1, 3, 16, 0));
-    humanBasic.add(fieldGroup("节奏方案", humanizationPreset));
-    humanBasic.add(fieldGroup("操作停顿（毫秒，最小/最大）", rangePanel(humanActionMin, humanActionMax)));
-    humanBasic.add(fieldGroup("逐字输入（毫秒，最小/最大）", rangePanel(humanTypingMin, humanTypingMax)));
-    addWideRow(form, row++, "仿人节奏", humanBasic, "安全预设会固定采用保守随机范围；选择自定义后使用下列参数。");
-    JPanel humanAdvanced = new JPanel(new GridLayout(1, 3, 16, 0));
-    humanAdvanced.add(fieldGroup("目标间停顿（秒，最小/最大）", rangePanel(humanTargetMin, humanTargetMax)));
-    humanAdvanced.add(fieldGroup("每批发送数量", humanBatchSize));
-    humanAdvanced.add(fieldGroup("批次休息（秒，最小/最大）", rangePanel(humanRestMin, humanRestMax)));
-    addWideRow(form, row, "仿人高级参数", humanAdvanced, "鼠标曲线、随机落点、按压停顿、滚动修正、标点停顿和发送后观察始终启用。");
+    addWideRow(form, row++, "账号开关", enabled, "关闭后只暂停当前账号，不影响其他账号。");
+    addWideRow(form, row++, "指定用户", scrollArea(targets), "每行填写一个完整用户名；只匹配同名会话，找不到或重名时不会发送。");
+    addWideRow(form, row++, "每日发送时间", fieldGroup("本机时间（HH:mm）", dailyTime), "每天到时后按名单逐一处理；程序晚启动时会继续处理当天未处理的用户。");
+    addWideRow(form, row++, "发送内容", scrollArea(messageText), "每位指定用户每天最多尝试发送一次，发送后会核验结果。");
 
     JPanel panel = new JPanel(new BorderLayout(0, 10));
     panel.add(new JScrollPane(form), BorderLayout.CENTER);
@@ -273,13 +230,6 @@ public class MainWindow extends JFrame {
     actions.add(feedback, BorderLayout.CENTER);
     actions.add(save, BorderLayout.EAST);
     return actions;
-  }
-
-  private JPanel rangePanel(JSpinner minimum, JSpinner maximum) {
-    JPanel panel = new JPanel(new GridLayout(1, 2, 8, 0));
-    panel.add(minimum);
-    panel.add(maximum);
-    return panel;
   }
 
   private JComponent buildRuntimePanel() {
@@ -442,26 +392,9 @@ public class MainWindow extends JFrame {
       enabled.setSelected(config.isEnabled());
       headlessMode.setSelected(config.isHeadlessMode());
       startWithWindows.setSelected(accountManager.isStartWithWindows());
-      intervalModeEnabled.setSelected(config.isIntervalModeEnabled());
-      intervalMinutes.setValue(config.getIntervalMinutes());
-      fixedModeEnabled.setSelected(config.isFixedModeEnabled());
-      fixedTimes.setText(String.join(System.lineSeparator(), config.getFixedTimes()));
+      dailyTime.setText(config.getDailyTime());
       targets.setText(String.join(System.lineSeparator(), config.getTargets()));
       messageText.setText(config.getMessageText());
-      dailyLimit.setValue(config.getDailyLimit());
-      cooldownMinutes.setValue(config.getCooldownMinutes());
-      retryCount.setValue(config.getRetryCount());
-      retryDelayMinutes.setValue(config.getRetryDelayMinutes());
-      humanizationPreset.setSelectedItem("CUSTOM".equals(config.getHumanizationPreset()) ? "自定义" : "安全预设");
-      humanActionMin.setValue(config.getHumanActionDelayMinMillis());
-      humanActionMax.setValue(config.getHumanActionDelayMaxMillis());
-      humanTypingMin.setValue(config.getHumanTypingDelayMinMillis());
-      humanTypingMax.setValue(config.getHumanTypingDelayMaxMillis());
-      humanTargetMin.setValue(config.getHumanTargetDelayMinSeconds());
-      humanTargetMax.setValue(config.getHumanTargetDelayMaxSeconds());
-      humanBatchSize.setValue(config.getHumanBatchSize());
-      humanRestMin.setValue(config.getHumanBatchRestMinSeconds());
-      humanRestMax.setValue(config.getHumanBatchRestMaxSeconds());
       accountTitle.setText("当前账号：" + profile.getName());
       accountHint.setText("账号标识：" + profile.getId() + " · 登录态与发送状态完全独立");
       refreshRuntimeStatus();
@@ -477,26 +410,9 @@ public class MainWindow extends JFrame {
       config.setEnabled(enabled.isSelected());
       config.setHeadlessMode(headlessMode.isSelected());
       config.setStartWithWindows(startWithWindows.isSelected());
-      config.setIntervalModeEnabled(intervalModeEnabled.isSelected());
-      config.setIntervalMinutes((Integer) intervalMinutes.getValue());
-      config.setFixedModeEnabled(fixedModeEnabled.isSelected());
-      config.setFixedTimes(Arrays.stream(fixedTimes.getText().split("\\R")).map(String::trim).filter(item -> !item.isBlank()).toList());
+      config.setDailyTime(dailyTime.getText());
       config.setTargets(Arrays.stream(targets.getText().split("\\R")).map(String::trim).filter(item -> !item.isBlank()).toList());
       config.setMessageText(messageText.getText().trim());
-      config.setDailyLimit((Integer) dailyLimit.getValue());
-      config.setCooldownMinutes((Integer) cooldownMinutes.getValue());
-      config.setRetryCount((Integer) retryCount.getValue());
-      config.setRetryDelayMinutes((Integer) retryDelayMinutes.getValue());
-      config.setHumanizationPreset("自定义".equals(humanizationPreset.getSelectedItem()) ? "CUSTOM" : "SAFE");
-      config.setHumanActionDelayMinMillis((Integer) humanActionMin.getValue());
-      config.setHumanActionDelayMaxMillis((Integer) humanActionMax.getValue());
-      config.setHumanTypingDelayMinMillis((Integer) humanTypingMin.getValue());
-      config.setHumanTypingDelayMaxMillis((Integer) humanTypingMax.getValue());
-      config.setHumanTargetDelayMinSeconds((Integer) humanTargetMin.getValue());
-      config.setHumanTargetDelayMaxSeconds((Integer) humanTargetMax.getValue());
-      config.setHumanBatchSize((Integer) humanBatchSize.getValue());
-      config.setHumanBatchRestMinSeconds((Integer) humanRestMin.getValue());
-      config.setHumanBatchRestMaxSeconds((Integer) humanRestMax.getValue());
       selectedRuntime().store().saveConfig(config);
       accountManager.setStartWithWindows(startWithWindows.isSelected());
       synchronizeStartupSetting();
@@ -586,14 +502,28 @@ public class MainWindow extends JFrame {
       AppConfig config = runtime.store().loadConfig();
       SendState state = runtime.store().loadState();
       String runningText = runtime.runner().isRunning() ? "正在执行" : config.isEnabled() ? "守护中" : "已停用";
-      String nextInterval = state.getNextIntervalRunAt() == null ? "未安排" : DateTimeFormatter.ofPattern("MM-dd HH:mm").format(state.getNextIntervalRunAt());
-      String nextRetry = state.getPendingRetries().stream().map(PendingRetry::getDueAt).min(LocalDateTime::compareTo)
-          .map(time -> DateTimeFormatter.ofPattern("MM-dd HH:mm").format(time)).orElse("无");
       String blocked = state.getBlockedReason().isBlank() ? "" : " · 需人工处理";
-      runtimeStatus.setText("运行状态：" + runningText + blocked + " · 今日成功 " + state.getSentToday()
-          + " 次 · 下次间隔 " + nextInterval + " · 待重试 " + nextRetry);
+      int total = config.getTargets().size();
+      int attempted = (int) config.getTargets().stream().filter(state::hasAttempted).count();
+      String nextRun = state.isLegacyUnattributedSentToday()
+          ? "旧版发送记录待跨日清除"
+          : runtime.runner().planner().nextRunDescription(config, state);
+      runtimeStatus.setText("运行状态：" + runningText + blocked + " · 今日确认 " + state.confirmedCount(config.getTargets()) + "/" + total
+          + " · 已处理 " + attempted + "/" + total + " · 计划 " + nextRun);
+      resumeAutomatic.setEnabled(!state.getBlockedReason().isBlank());
     } catch (IOException error) {
       runtimeStatus.setText("运行状态：读取失败");
+    }
+  }
+
+  private void resumeSelectedAccount() {
+    AccountProfile profile = accountList.getSelectedValue();
+    if (profile == null) return;
+    int answer = JOptionPane.showConfirmDialog(this,
+        "确认已在浏览器完成登录或安全验证？\n此操作只解除暂停，不会立即发送；剩余用户仍由每日计划处理。",
+        "恢复每日发送", JOptionPane.OK_CANCEL_OPTION, JOptionPane.WARNING_MESSAGE);
+    if (answer == JOptionPane.OK_OPTION) {
+      selectedRuntime().runner().resumeAutomaticWork();
     }
   }
 

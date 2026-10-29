@@ -1,21 +1,12 @@
 package awa.uxu.douyin.autospark;
 
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.time.Clock;
-import java.time.LocalDateTime;
+import java.time.LocalDate;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
-import java.util.HashSet;
-import java.util.HexFormat;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
-import java.util.Random;
-import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -27,28 +18,24 @@ public class AutoRunner implements AutoCloseable {
   private final ConfigStore store;
   private final ChatAutomator automator;
   private final ChineseLogger logger;
-  private final SendPolicy sendPolicy = new SendPolicy();
-  private final Clock clock;
-  private final Random random;
-  private final SchedulePlanner planner;
+  private final DailySendPlanner planner;
   private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(r -> daemon(r, "抖音自动续火花-调度器"));
   private final ExecutorService worker = Executors.newSingleThreadExecutor(r -> daemon(r, "抖音自动续火花-执行器"));
   private final AtomicBoolean running = new AtomicBoolean(false);
   private final AtomicBoolean cycleQueued = new AtomicBoolean(false);
   private final AtomicBoolean loginMaintenanceQueued = new AtomicBoolean(false);
+  private final AtomicBoolean legacyPauseLogged = new AtomicBoolean(false);
   private final Deque<TaskResult> recentResults = new ArrayDeque<>();
 
   public AutoRunner(ConfigStore store, ChatAutomator automator, ChineseLogger logger) {
-    this(store, automator, logger, Clock.systemDefaultZone(), new Random());
+    this(store, automator, logger, Clock.systemDefaultZone());
   }
 
-  AutoRunner(ConfigStore store, ChatAutomator automator, ChineseLogger logger, Clock clock, Random random) {
+  AutoRunner(ConfigStore store, ChatAutomator automator, ChineseLogger logger, Clock clock) {
     this.store = store;
     this.automator = automator;
     this.logger = logger;
-    this.clock = clock;
-    this.random = random;
-    planner = new SchedulePlanner(clock, random);
+    planner = new DailySendPlanner(clock);
   }
 
   public void start() {
@@ -56,21 +43,26 @@ public class AutoRunner implements AutoCloseable {
   }
 
   public void start(long initialDelaySeconds) {
-    scheduler.scheduleWithFixedDelay(this::scheduledTick, Math.max(1, initialDelaySeconds), 15, TimeUnit.SECONDS);
+    scheduler.scheduleWithFixedDelay(this::scheduledTick, Math.max(1, initialDelaySeconds), 5, TimeUnit.SECONDS);
     scheduler.scheduleWithFixedDelay(this::scheduleLoginMaintenance, 15, 15, TimeUnit.SECONDS);
-    logger.info("自动调度器已启动，定时、间隔和失败重试将按独立时间线执行。");
+    logger.info("每日自动发送已启动；每个目标每天最多处理一次，并按名单逐项记录结果。");
   }
 
-  public void runNow() {
+  public void resumeAutomaticWork() {
     worker.submit(() -> {
       try {
         SendState state = store.loadState();
+        if (state.getBlockedReason().isBlank()) {
+          logger.info("当前账号没有需要解除的人工暂停。");
+          return;
+        }
+        String reason = state.getBlockedReason();
         state.setBlockedReason("");
         store.saveState(state);
+        logger.info("已解除账号暂停（此前原因：“ + reason + ”）；后续仍按今日计划时间和未处理名单执行，不会立即发送。");
       } catch (IOException error) {
-        logger.exception("清除人工处理状态失败", error);
+        logger.exception("解除账号暂停失败", error);
       }
-      runManual();
     });
   }
 
@@ -101,481 +93,229 @@ public class AutoRunner implements AutoCloseable {
     return running.get();
   }
 
+  DailySendPlanner planner() {
+    return planner;
+  }
+
   private void scheduledTick() {
     try {
       AppConfig config = store.loadConfig();
       SendState state = store.loadState();
+      if (state.rollOverIfNeeded(planner.now().toLocalDate())) {
+        store.saveState(state);
+        legacyPauseLogged.set(false);
+      }
+      if (state.isLegacyUnattributedSentToday() && legacyPauseLogged.compareAndSet(false, true)) {
+        logger.warn("旧版本今天存在无法对应到具体用户的发送记录。为避免重复发送，本账号今天暂停剩余名单；明天恢复正常计划。");
+      }
       if (!config.isEnabled() || !state.getBlockedReason().isBlank()) return;
-      if (planner.plan(config, state)) store.saveState(state);
-      if (!planner.dueTriggers(state).isEmpty() || !planner.dueRetries(state).isEmpty()) queueDueCycle();
+      if (!planner.pendingTargets(config, state).isEmpty()) queueDailyCycle();
     } catch (Exception error) {
-      logger.exception("调度器检查失败", error);
+      logger.exception("每日发送计划检查失败", error);
     }
   }
 
-  private void queueDueCycle() {
+  private void queueDailyCycle() {
     if (!cycleQueued.compareAndSet(false, true)) return;
     worker.submit(() -> {
       cycleQueued.set(false);
-      runDueCycle();
+      runDailyCycle();
     });
   }
 
-  private void runManual() {
-    if (!running.compareAndSet(false, true)) {
-      logger.info("已有任务正在执行，手动请求已进入执行队列。");
-      return;
-    }
-    try {
-      executeFullRun(store.loadConfig(), "手动执行", taskId("手动执行"), new HashSet<>());
-    } catch (Exception error) {
-      logger.exception("手动任务执行失败", error);
-    } finally {
-      running.set(false);
-    }
-  }
-
-  private void runDueCycle() {
+  void runDailyCycle() {
     if (!running.compareAndSet(false, true)) return;
-    List<PendingTrigger> dueTriggers = List.of();
     try {
       AppConfig config = store.loadConfig();
       SendState state = store.loadState();
-      if (!config.isEnabled() || !state.getBlockedReason().isBlank()) return;
-      dueTriggers = planner.dueTriggers(state);
-      List<PendingRetry> dueRetries = planner.dueRetries(state);
-      if (dueTriggers.isEmpty() && dueRetries.isEmpty()) return;
-      Set<String> processedKeys = new HashSet<>();
-      for (PendingRetry retry : dueRetries) {
-        processRetry(config, retry, processedKeys);
-        if (isAccountBlocked()) break;
+      if (state.rollOverIfNeeded(planner.now().toLocalDate())) {
+        store.saveState(state);
+        legacyPauseLogged.set(false);
       }
-      if (!dueTriggers.isEmpty() && !isAccountBlocked()) {
-        String triggerName = triggerName(dueTriggers);
-        executeFullRun(config, triggerName, taskId(triggerName), processedKeys);
+      if (!config.isEnabled()) {
+        logger.info("当前账号已停用，本次每日发送不执行。");
+        return;
       }
-    } catch (Exception error) {
-      logger.exception("自动任务执行失败", error);
-    } finally {
-      if (!dueTriggers.isEmpty()) {
-        try {
-          AppConfig config = store.loadConfig();
-          SendState state = store.loadState();
-          planner.complete(config, state, dueTriggers);
-          store.saveState(state);
-        } catch (IOException error) {
-          logger.exception("保存调度完成状态失败", error);
+      if (!state.getBlockedReason().isBlank()) {
+        logger.warn("当前账号处于人工暂停状态，未处理的目标保持待发送：" + state.getBlockedReason());
+        logDailySummary(config, state, true);
+        return;
+      }
+      if (state.isLegacyUnattributedSentToday()) {
+        logger.warn("旧版本今天存在无法归属到具体用户的发送记录，今日跳过剩余名单以避免重复发送。");
+        return;
+      }
+      List<String> pending = planner.pendingTargets(config, state);
+      if (pending.isEmpty()) return;
+
+      logger.info("开始每日发送：计划时间 " + config.getDailyTime() + "，名单 " + config.getTargets().size()
+          + " 位，今日尚未处理 " + pending.size() + " 位。");
+      LocalDate runDate = planner.now().toLocalDate();
+      for (String target : pending) {
+        if (!planner.now().toLocalDate().equals(runDate)) {
+          logger.info("当前发送跨过本地午夜，今日任务停止；新的一天会在设定时间重新处理名单。");
+          break;
         }
+        if (!store.loadConfig().isEnabled()) {
+          logger.info("当前账号在名单处理中被停用，剩余用户保持待处理。");
+          break;
+        }
+        state = store.loadState();
+        if (state.rollOverIfNeeded(planner.now().toLocalDate())) {
+          store.saveState(state);
+        }
+        if (!state.getBlockedReason().isBlank()) break;
+        if (state.isLegacyUnattributedSentToday() || state.hasAttempted(target)) continue;
+
+        state.beginAttempt(target, planner.now());
+        store.saveState(state);
+        TaskResult result = processTarget(config, target);
+        addRecent(result);
+        state = store.loadState();
+        String resultStatus = resultStatus(result);
+        if (result.isBlocked() || isAccountLevelBlock(result.getErrorCode())) {
+          resultStatus = "PAUSED";
+          String reason = nonEmpty(result.getSecurityPrompt(), result.getReason(), result.getErrorDetail(), "页面需要人工处理");
+          state.setBlockedReason(reason);
+        }
+        state.recordResult(target, resultStatus, resultDetail(result), planner.now());
+        store.saveState(state);
+        logTargetResult(target, result, resultStatus);
+        if ("PAUSED".equals(resultStatus)) break;
       }
+      state = store.loadState();
+      logDailySummary(config, state, !state.getBlockedReason().isBlank());
+    } catch (Exception error) {
+      logger.exception("每日发送任务中断", error);
+      try {
+        SendState state = store.loadState();
+        logDailySummary(store.loadConfig(), state, !state.getBlockedReason().isBlank());
+      } catch (Exception statusError) {
+        logger.exception("读取中断后的每日发送状态失败", statusError);
+      }
+    } finally {
       running.set(false);
     }
   }
 
-  private void executeFullRun(AppConfig config, String triggerName, String taskId, Set<String> processedKeys) throws IOException {
-    if (!config.isEnabled()) {
-      logger.info("当前账号已停用，本次任务不执行。");
-      return;
-    }
-    if (config.getTargets().isEmpty()) {
-      logger.info("目标会话为空，本次任务按程序策略跳过，不计为失败。");
-      return;
-    }
-    SendState state = store.loadState();
-    if (sendPolicy.dailyLimitReached(state, config)) {
-      logger.info("今日已达到 " + config.getDailyLimit() + " 次发送上限，本次仍会扫描全部目标，并将未发送会话排入次日续发队列。");
-    }
-
-    logger.info("开始执行任务：" + taskId + "，触发方式：" + triggerName + "。");
-    List<TaskResult> results = new ArrayList<>();
-    Map<String, ConversationTarget> conversations = discoverConversations(config, taskId, results, true);
-    int sentInBatch = 0;
-    for (ConversationTarget conversation : conversations.values()) {
-      String stateKey = conversation.stateKey();
-      String target = conversation.displayName();
-      if (processedKeys.contains(stateKey)) {
-        addSkipped(results, target, "本轮已处理，已合并重复触发");
-        continue;
-      }
-      state = store.loadState();
-      PendingRetry pendingRetry = findPendingRetry(state, stateKey);
-      if (pendingRetry != null && !DailyLimitDeferral.isDeferred(pendingRetry)) {
-        addSkipped(results, target, "该会话已有独立重试任务，正常调度暂不提前重发");
-        continue;
-      }
-      if (sendPolicy.dailyLimitReached(state, config)) {
-        LocalDateTime dueAt = deferForDailyLimit(config, conversation);
-        addSkipped(results, target, "今日发送次数已达到上限，已排入 " + dueAt + " 后的自动续发队列");
-        continue;
-      }
-      String cooldown = sendPolicy.cooldownReason(state, config, stateKey, target, now());
-      if (!cooldown.isBlank()) {
-        addSkipped(results, target, cooldown);
-        continue;
-      }
-      TaskResult result = sendTarget(config, conversation, taskId);
-      processedKeys.add(stateKey);
-      results.add(result);
-      addRecent(result);
-      handleTargetResult(config, conversation, result, 0);
-      sentInBatch += result.isConfirmed() ? 1 : 0;
-      if (result.isBlocked()) break;
-      humanPauseBetweenTargets(config, sentInBatch);
-    }
-    RunCounts counts = countResults(results);
-    logger.info("任务结束：确认成功 " + counts.success + " 个，结果不确定 " + counts.uncertain
-        + " 个，主动跳过 " + counts.skipped + " 个，失败 " + counts.failed + " 个，需人工处理 " + counts.blocked + " 个。");
-  }
-
-  private Map<String, ConversationTarget> discoverConversations(
-      AppConfig config, String taskId, List<TaskResult> results, boolean scheduleFailure) throws IOException {
-    Map<String, ConversationTarget> conversations = new LinkedHashMap<>();
-    for (String query : config.getTargets()) {
-      ConversationDiscoveryResult discovery;
-      try {
-        logger.info("正在查找与关键词“" + query + "”匹配的全部会话。");
-        discovery = automator.discoverConversations(config, query, taskId);
-      } catch (BrowserProfileInUseException error) {
-        discovery = ConversationDiscoveryResult.failed("BROWSER_PROFILE_IN_USE", error.getMessage());
-      }
-      if (!discovery.isOk()) {
-        TaskResult failed = TaskResult.failed(query, discovery.getErrorCode(), discovery.getReason());
-        if (isBlockedCode(discovery.getErrorCode())) {
-          failed.setOutcome("BLOCKED");
-          blockAccount(discovery.getReason());
-        }
-        results.add(failed);
-        addRecent(failed);
-        if (scheduleFailure && !failed.isBlocked()) scheduleDiscoveryRetry(config, query, failed, 0);
-        continue;
-      }
-      logger.info("关键词“" + query + "”已完整扫描会话列表，匹配到 "
-          + discovery.getConversations().size() + " 个会话。完全同名会话优先，其余包含关键词的会话继续处理。");
-      for (ConversationTarget conversation : discovery.getConversations()) {
-        if (conversation.getQuery().isBlank()) conversation.setQuery(query);
-        conversations.putIfAbsent(conversation.stateKey(), conversation);
-      }
-    }
-    logger.info("全部关键词扫描完成，去重后本轮共有 " + conversations.size() + " 个待处理会话。");
-    return conversations;
-  }
-
-  private TaskResult sendTarget(AppConfig config, ConversationTarget conversation, String taskId) {
+  private TaskResult processTarget(AppConfig config, String target) {
+    ConversationDiscoveryResult discovery;
     try {
-      return automator.sendMessage(config, conversation, taskId);
+      logger.info("正在查找指定用户“" + target + "”的完全同名会话。");
+      discovery = automator.discoverConversations(config, target, taskId("查找用户"));
     } catch (BrowserProfileInUseException error) {
-      return TaskResult.failed(conversation.displayName(), "BROWSER_PROFILE_IN_USE", error.getMessage());
+      return TaskResult.failed(target, "BROWSER_PROFILE_IN_USE", error.getMessage());
     }
-  }
-
-  private void handleTargetResult(AppConfig config, ConversationTarget conversation, TaskResult result, int retriesCompleted) throws IOException {
-    String stateKey = conversation.stateKey();
-    SendState state = store.loadState();
-    if (result.isConfirmed()) {
-      sendPolicy.markSent(state, stateKey, now());
-      state.getPendingRetries().removeIf(item -> item.getStateKey().equals(stateKey));
-      store.saveState(state);
-      logger.info("目标 " + conversation.displayName() + " 已检测到新增己方消息气泡，确认发送成功。");
-      return;
+    if (!discovery.isOk()) {
+      return TaskResult.failed(target, discovery.getErrorCode(), discovery.getReason());
     }
-    if (result.isSkipped()) {
-      logger.info("目标 " + conversation.displayName() + " 已主动跳过：" + result.getReason() + "。");
-      return;
+    if (discovery.getConversations().isEmpty()) {
+      return TaskResult.failed(target, "TARGET_NOT_FOUND", "会话列表中没有完全同名的用户");
     }
-    if (result.isBlocked() || isBlockedCode(result.getErrorCode())) {
-      result.setOutcome("BLOCKED");
-      blockAccount(nonEmpty(result.getSecurityPrompt(), result.getReason(), "页面要求人工完成安全验证"));
-      state = store.loadState();
-      state.getPendingRetries().removeIf(item -> item.getStateKey().equals(stateKey));
-      store.saveState(state);
-      return;
+    if (discovery.getConversations().size() != 1) {
+      return TaskResult.failed(target, "TARGET_AMBIGUOUS", "存在多个完全同名会话，无法确认指定用户；未发送");
     }
-    if (retriesCompleted >= config.getRetryCount() && !result.isUncertain()) {
-      state.getPendingRetries().removeIf(item -> item.getStateKey().equals(stateKey));
-      store.saveState(state);
-      result.setOutcome("FINAL_FAILURE");
-      logger.warn("目标 " + conversation.displayName() + " 本次处理失败："
-          + nonEmpty(result.getReason(), result.getErrorDetail(), "未提供失败原因")
-          + "；已达到消息重试上限，等待下一次正常调度。");
-      return;
+    ConversationTarget conversation = discovery.getConversations().getFirst();
+    if (!TargetNames.key(conversation.displayName()).equals(TargetNames.key(target))) {
+      return TaskResult.failed(target, "TARGET_NAME_MISMATCH", "扫描结果与配置名称不完全一致；未发送");
     }
-    PendingRetry retry = createRetry(config, conversation, result, retriesCompleted);
-    upsertRetry(state, retry);
-    store.saveState(state);
-    if (result.isUncertain()) {
-      String followUp = retriesCompleted >= config.getRetryCount() ? "只核验原消息，不再点击发送" : "先核验原消息，确认不存在后才执行重试";
-      logger.warn("目标 " + conversation.displayName() + " 的发送结果不确定，将在约 " + config.getRetryDelayMinutes()
-          + " 分钟后" + followUp + "。");
-    } else {
-      logger.warn("目标 " + conversation.displayName() + " 未确认成功，将在约 " + config.getRetryDelayMinutes() + " 分钟后独立重试。");
-    }
-  }
-
-  private void processRetry(AppConfig config, PendingRetry retry, Set<String> processedKeys) throws IOException {
-    SendState state = store.loadState();
-    if (!config.getTargets().contains(retry.getQuery())) {
-      removeRetry(state, retry.getId());
-      store.saveState(state);
-      logger.info("重试目标已从配置移除，本次按程序策略跳过，不计为失败。");
-      return;
-    }
-    if (retry.isDiscoveryRetry()) {
-      processDiscoveryRetry(config, retry, processedKeys);
-      return;
-    }
-
-    ConversationTarget conversation = retry.getConversation();
-    processedKeys.add(conversation.stateKey());
-    if ("UNCERTAIN".equals(retry.getOutcome())) {
-      TaskResult reconciliation = automator.reconcileMessage(config, conversation, retry, taskId("结果核验"));
-      addRecent(reconciliation);
-      if (reconciliation.isConfirmed() || reconciliation.isBlocked()) {
-        handleTargetResult(config, conversation, reconciliation, retry.getRetriesCompleted());
-        return;
-      }
-      if (!reconciliation.isOk() || !"NOT_CONFIRMED".equals(reconciliation.getOutcome())) {
-        state = store.loadState();
-        retry.setDueAt(now().plusMinutes(config.getRetryDelayMinutes()));
-        upsertRetry(state, retry);
-        store.saveState(state);
-        logger.warn("目标 " + conversation.displayName() + " 的原消息核验未完成，已延期核验；本次不会重复发送。");
-        return;
-      }
-      if (retry.getRetriesCompleted() >= retry.getMaxRetries()) {
-        state = store.loadState();
-        removeRetry(state, retry.getId());
-        store.saveState(state);
-        reconciliation.setOutcome("FINAL_FAILURE");
-        logger.warn("目标 " + conversation.displayName() + " 未核验到原消息且发送重试次数已用完，本次结束且不再发送。");
-        return;
-      }
-    }
-    if (!digest(config.getMessageText()).equals(retry.getMessageDigest())) {
-      state = store.loadState();
-      removeRetry(state, retry.getId());
-      store.saveState(state);
-      logger.info("发送内容已变更，旧重试任务已主动取消，不发送过期内容。");
-      return;
-    }
-    state = store.loadState();
-    if (sendPolicy.dailyLimitReached(state, config)) {
-      LocalDateTime dueAt = DailyLimitDeferral.postpone(retry, now());
-      upsertRetry(state, retry);
-      store.saveState(state);
-      logger.info("目标 " + conversation.displayName() + " 今日发送次数已达到上限，续发任务已顺延至 " + dueAt + " 后。");
-      return;
-    }
-    TaskResult result = sendTarget(config, conversation, taskId("失败重试"));
-    addRecent(result);
-    state = store.loadState();
-    removeRetry(state, retry.getId());
-    store.saveState(state);
-    int retriesCompleted = DailyLimitDeferral.isDeferred(retry) ? 0 : retry.getRetriesCompleted() + 1;
-    handleTargetResult(config, conversation, result, retriesCompleted);
-  }
-
-  private void processDiscoveryRetry(AppConfig config, PendingRetry retry, Set<String> processedKeys) throws IOException {
-    List<TaskResult> discoveryResults = new ArrayList<>();
-    Map<String, ConversationTarget> conversations = discoverConversations(config, taskId("发现重试"), discoveryResults, false, retry.getQuery());
-    SendState state = store.loadState();
-    removeRetry(state, retry.getId());
-    store.saveState(state);
-    if (conversations.isEmpty()) {
-      TaskResult failed = discoveryResults.isEmpty()
-          ? TaskResult.failed(retry.getQuery(), "TARGET_NOT_FOUND", "重试时仍未发现目标会话")
-          : discoveryResults.getLast();
-      if (!failed.isBlocked() && retry.getRetriesCompleted() + 1 < retry.getMaxRetries()) {
-        scheduleDiscoveryRetry(config, retry.getQuery(), failed, retry.getRetriesCompleted() + 1);
-      }
-      return;
-    }
-    for (ConversationTarget conversation : conversations.values()) {
-      processedKeys.add(conversation.stateKey());
-      state = store.loadState();
-      if (sendPolicy.dailyLimitReached(state, config)) {
-        LocalDateTime dueAt = deferForDailyLimit(config, conversation);
-        logger.info("目标 " + conversation.displayName() + " 今日发送次数已达到上限，已排入 " + dueAt + " 后的自动续发队列。");
-        continue;
-      }
-      TaskResult result = sendTarget(config, conversation, taskId("发现重试"));
-      addRecent(result);
-      handleTargetResult(config, conversation, result, retry.getRetriesCompleted() + 1);
-      if (result.isBlocked()) break;
-    }
-  }
-
-  private Map<String, ConversationTarget> discoverConversations(
-      AppConfig config, String taskId, List<TaskResult> results, boolean scheduleFailure, String onlyQuery) throws IOException {
-    List<String> originalTargets = config.getTargets();
-    config.setTargets(List.of(onlyQuery));
+    conversation.setQuery(target);
     try {
-      return discoverConversations(config, taskId, results, scheduleFailure);
-    } finally {
-      config.setTargets(originalTargets);
+      return automator.sendMessage(config, conversation, taskId("发送消息"));
+    } catch (BrowserProfileInUseException error) {
+      return TaskResult.failed(target, "BROWSER_PROFILE_IN_USE", error.getMessage());
     }
   }
 
-  private PendingRetry createRetry(AppConfig config, ConversationTarget conversation, TaskResult result, int retriesCompleted) {
-    PendingRetry retry = new PendingRetry();
-    retry.setId("目标:" + conversation.stateKey());
-    retry.setStateKey(conversation.stateKey());
-    retry.setConversation(conversation);
-    retry.setQuery(conversation.getQuery());
-    retry.setMessageText(config.getMessageText());
-    retry.setMessageDigest(digest(config.getMessageText()));
-    retry.setOutcome(result.isUncertain() ? "UNCERTAIN" : "FAILED");
-    retry.setErrorCode(result.getErrorCode());
-    retry.setRetriesCompleted(retriesCompleted);
-    retry.setMaxRetries(config.getRetryCount());
-    retry.setAttemptedAt(now());
-    retry.setDueAt(now().plusMinutes(config.getRetryDelayMinutes()));
-    retry.setClickedAtEpochMillis(result.getClickedAtEpochMillis());
-    retry.setBaselineMessageCount(result.getBaselineMessageCount());
-    retry.setBaselineFingerprints(result.getBaselineFingerprints());
-    retry.setBaselineMessageTimestamps(result.getBaselineMessageTimestamps());
-    return retry;
+  private String resultStatus(TaskResult result) {
+    if (result.isConfirmed()) return "SENT";
+    if (result.isUncertain()) return "UNCERTAIN";
+    if ("TARGET_NOT_FOUND".equals(result.getErrorCode())) return "NOT_FOUND";
+    if ("TARGET_AMBIGUOUS".equals(result.getErrorCode())) return "AMBIGUOUS";
+    if (result.isBlocked() || isAccountLevelBlock(result.getErrorCode())) return "PAUSED";
+    return "NOT_SENT";
   }
 
-  private void scheduleDiscoveryRetry(AppConfig config, String query, TaskResult result, int retriesCompleted) throws IOException {
-    if (retriesCompleted >= config.getRetryCount()) {
-      logger.warn("关键词“" + query + "”发现失败且已达到重试上限。");
-      return;
-    }
-    PendingRetry retry = new PendingRetry();
-    retry.setId("关键词:" + query);
-    retry.setStateKey("关键词:" + query);
-    retry.setQuery(query);
-    retry.setMessageText(config.getMessageText());
-    retry.setMessageDigest(digest(config.getMessageText()));
-    retry.setOutcome("FAILED");
-    retry.setErrorCode(result.getErrorCode());
-    retry.setRetriesCompleted(retriesCompleted);
-    retry.setMaxRetries(config.getRetryCount());
-    retry.setAttemptedAt(now());
-    retry.setDueAt(now().plusMinutes(config.getRetryDelayMinutes()));
-    SendState state = store.loadState();
-    upsertRetry(state, retry);
-    store.saveState(state);
+  private boolean isAccountLevelBlock(String errorCode) {
+    return List.of("LOGIN_REQUIRED", "SECURITY_CHECK_REQUIRED", "BROWSER_PROFILE_IN_USE").contains(errorCode);
   }
 
-  private void addSkipped(List<TaskResult> results, String target, String reason) {
-    TaskResult skipped = TaskResult.skipped(target, reason);
-    results.add(skipped);
-    addRecent(skipped);
-    logger.info("目标 " + target + " 已主动跳过：" + reason + "。");
+  private String resultDetail(TaskResult result) {
+    return nonEmpty(result.getReason(), result.getErrorDetail(), result.getSecurityPrompt(), result.getOutcome());
   }
 
-  private PendingRetry findPendingRetry(SendState state, String stateKey) {
-    return state.getPendingRetries().stream()
-        .filter(item -> item.getStateKey().equals(stateKey))
-        .findFirst()
-        .orElse(null);
-  }
-
-  private LocalDateTime deferForDailyLimit(AppConfig config, ConversationTarget conversation) throws IOException {
-    SendState state = store.loadState();
-    PendingRetry existing = findPendingRetry(state, conversation.stateKey());
-    PendingRetry retry;
-    if (existing != null && DailyLimitDeferral.isDeferred(existing)) {
-      retry = existing;
-      DailyLimitDeferral.postpone(retry, now());
+  private void logTargetResult(String target, TaskResult result, String status) {
+    if ("SENT".equals(status)) {
+      logger.info("用户“" + target + "”已发送并确认。");
+    } else if ("PAUSED".equals(status)) {
+      logger.warn("用户“" + target + "”处理后账号进入人工暂停，已停止后续目标。");
+    } else if ("UNCERTAIN".equals(status)) {
+      logger.warn("用户“" + target + "”的发送结果不确定；今日不自动重试，以免重复发送。");
+    } else if ("NOT_FOUND".equals(status)) {
+      logger.warn("用户“" + target + "”未找到完全同名会话；今天不再重试。");
+    } else if ("AMBIGUOUS".equals(status)) {
+      logger.warn("用户“" + target + "”存在重名会话，未发送；今天不再重试。");
     } else {
-      retry = DailyLimitDeferral.create(config, conversation, digest(config.getMessageText()), now());
+      logger.warn("用户“" + target + "”未发送成功，今天不自动重试：" + resultDetail(result));
     }
-    upsertRetry(state, retry);
-    store.saveState(state);
-    return retry.getDueAt();
   }
 
-  private void upsertRetry(SendState state, PendingRetry retry) {
-    state.getPendingRetries().removeIf(item -> item.getId().equals(retry.getId()));
-    state.getPendingRetries().add(retry);
-  }
-
-  private void removeRetry(SendState state, String id) {
-    state.getPendingRetries().removeIf(item -> item.getId().equals(id));
-  }
-
-  private boolean isAccountBlocked() throws IOException {
-    return !store.loadState().getBlockedReason().isBlank();
-  }
-
-  private void blockAccount(String reason) throws IOException {
-    SendState state = store.loadState();
-    state.setBlockedReason(nonEmpty(reason, "", "需要人工处理页面安全验证"));
-    store.saveState(state);
-    logger.warn("当前账号自动发送已暂停，需要人工处理：" + state.getBlockedReason() + "。");
-  }
-
-  private boolean isBlockedCode(String code) {
-    return List.of("LOGIN_REQUIRED", "SECURITY_CHECK_REQUIRED").contains(code);
-  }
-
-  private void humanPauseBetweenTargets(AppConfig config, int sentInBatch) {
-    if (sentInBatch > 0 && sentInBatch % config.getHumanBatchSize() == 0) {
-      long seconds = randomBetween(config.getHumanBatchRestMinSeconds(), config.getHumanBatchRestMaxSeconds());
-      logger.info("已完成一批发送，仿人节奏休息约 " + seconds + " 秒。");
-      sleep(seconds * 1000L);
+  private void logDailySummary(AppConfig config, SendState state, boolean paused) {
+    List<String> targets = config.getTargets();
+    int total = targets.size();
+    int sent = 0;
+    int uncertain = 0;
+    int ambiguous = 0;
+    int notFound = 0;
+    int failed = 0;
+    int pausedTargets = 0;
+    int processed = 0;
+    for (String target : targets) {
+      DailyTargetResult result = state.getDailyTargets().get(TargetNames.key(target));
+      if (result == null) continue;
+      processed++;
+      switch (result.getStatus()) {
+        case "SENT", "MIGRATED_SENT" -> sent++;
+        case "UNCERTAIN", "PROCESSING" -> uncertain++;
+        case "AMBIGUOUS" -> ambiguous++;
+        case "NOT_FOUND" -> notFound++;
+        case "PAUSED" -> pausedTargets++;
+        case "NOT_SENT", "FAILED" -> failed++;
+      }
+    }
+    int remaining = Math.max(0, total - processed);
+    if (paused || !state.getBlockedReason().isBlank()) {
+      logger.warn("每日发送已暂停：确认发送 " + sent + "/" + total + "，已处理 " + processed + "/" + total
+          + "，剩余 " + remaining + " 位未处理。原因：" + state.getBlockedReason());
+    } else if (remaining > 0) {
+      logger.warn("每日名单尚未处理完：确认发送 " + sent + "/" + total + "，结果不确定 " + uncertain
+          + "，未找到 " + notFound + "，重名 " + ambiguous + "，失败 " + failed + "，剩余 " + remaining + " 位。");
+    } else if (total > 0 && sent == total) {
+      logger.info("今日名单全部发送成功：" + sent + "/" + total + " 位用户。");
+    } else if (total == 0) {
+      logger.warn("今日名单为空，没有发送消息。");
     } else {
-      sleep(randomBetween(config.getHumanTargetDelayMinSeconds(), config.getHumanTargetDelayMaxSeconds()) * 1000L);
+      logger.warn("今日名单已处理完，但并非全部发送成功：确认发送 " + sent + "/" + total
+          + "，结果不确定 " + uncertain + "，未找到 " + notFound + "，重名 " + ambiguous
+          + "，失败 " + failed + "，账号级暂停目标 " + pausedTargets + "。");
     }
   }
 
-  private long randomBetween(int min, int max) {
-    return max <= min ? min : min + random.nextInt(max - min + 1);
+  private String taskId(String action) {
+    return action + "-" + System.currentTimeMillis() + "-" + UUID.randomUUID().toString().substring(0, 8);
   }
 
-  private RunCounts countResults(List<TaskResult> results) {
-    RunCounts counts = new RunCounts();
-    for (TaskResult result : results) {
-      if (result.isConfirmed()) counts.success++;
-      else if (result.isSkipped()) counts.skipped++;
-      else if (result.isBlocked()) counts.blocked++;
-      else if (result.isUncertain()) counts.uncertain++;
-      else counts.failed++;
-    }
-    return counts;
-  }
-
-  private String triggerName(List<PendingTrigger> triggers) {
-    boolean fixed = triggers.stream().anyMatch(item -> "FIXED".equals(item.getType()));
-    boolean interval = triggers.stream().anyMatch(item -> "INTERVAL".equals(item.getType()));
-    return fixed && interval ? "定时模式与间隔模式合并触发" : fixed ? "定时模式" : "间隔模式";
-  }
-
-  private String taskId(String name) {
-    return name + "-" + System.currentTimeMillis() + "-" + UUID.randomUUID().toString().substring(0, 8);
-  }
-
-  private LocalDateTime now() {
-    return LocalDateTime.now(clock);
-  }
-
-  private String digest(String text) {
-    try {
-      return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(text.getBytes(StandardCharsets.UTF_8)));
-    } catch (NoSuchAlgorithmException error) {
-      throw new IllegalStateException("系统不支持 SHA-256 摘要", error);
-    }
+  private String nonEmpty(String first, String second, String third, String fallback) {
+    if (first != null && !first.isBlank()) return first;
+    if (second != null && !second.isBlank()) return second;
+    if (third != null && !third.isBlank()) return third;
+    return fallback;
   }
 
   private void addRecent(TaskResult result) {
     synchronized (recentResults) {
       recentResults.addLast(result);
       while (recentResults.size() > 30) recentResults.removeFirst();
-    }
-  }
-
-  private String nonEmpty(String first, String second, String fallback) {
-    if (first != null && !first.isBlank()) return first;
-    if (second != null && !second.isBlank()) return second;
-    return fallback;
-  }
-
-  private void sleep(long milliseconds) {
-    try {
-      Thread.sleep(milliseconds);
-    } catch (InterruptedException error) {
-      Thread.currentThread().interrupt();
     }
   }
 
@@ -611,13 +351,5 @@ public class AutoRunner implements AutoCloseable {
     Thread thread = new Thread(runnable, name);
     thread.setDaemon(true);
     return thread;
-  }
-
-  private static final class RunCounts {
-    int success;
-    int uncertain;
-    int skipped;
-    int failed;
-    int blocked;
   }
 }

@@ -1,20 +1,18 @@
 package awa.uxu.douyin.autospark;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+
 import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
+@JsonIgnoreProperties(ignoreUnknown = true)
 public class SendState {
-  private Map<String, Long> perTarget = new LinkedHashMap<>();
-  private Map<String, Boolean> fixedRuns = new LinkedHashMap<>();
-  private LocalDate sentDate = LocalDate.now();
-  private int sentToday = 0;
-  private LocalDateTime nextIntervalRunAt;
-  private List<PendingTrigger> pendingTriggers = new ArrayList<>();
-  private List<PendingRetry> pendingRetries = new ArrayList<>();
+  private LocalDate dailyDate = LocalDate.now();
+  private Map<String, DailyTargetResult> dailyTargets = new LinkedHashMap<>();
+  private boolean legacyUnattributedSentToday;
   private String blockedReason = "";
 
   public static SendState defaults() {
@@ -22,90 +20,79 @@ public class SendState {
   }
 
   public void normalize() {
-    if (perTarget == null) {
-      perTarget = new LinkedHashMap<>();
+    if (dailyDate == null) {
+      dailyDate = LocalDate.now();
     }
-    if (fixedRuns == null) {
-      fixedRuns = new LinkedHashMap<>();
+    if (dailyTargets == null) {
+      dailyTargets = new LinkedHashMap<>();
     }
-    if (pendingTriggers == null) {
-      pendingTriggers = new ArrayList<>();
-    }
-    if (pendingRetries == null) {
-      pendingRetries = new ArrayList<>();
-    }
+    dailyTargets.entrySet().removeIf(entry -> entry.getKey() == null || entry.getKey().isBlank() || entry.getValue() == null);
     if (blockedReason == null) {
       blockedReason = "";
     }
-    if (sentDate == null) {
-      sentDate = LocalDate.now();
+  }
+
+  public boolean rollOverIfNeeded(LocalDate today) {
+    normalize();
+    if (dailyDate.equals(today)) {
+      return false;
     }
-    if (!sentDate.equals(LocalDate.now())) {
-      sentDate = LocalDate.now();
-      sentToday = 0;
-    }
-    LocalDateTime retentionStart = LocalDateTime.now().minusDays(8);
-    perTarget.entrySet().removeIf(entry -> entry.getValue() == null || entry.getValue() < retentionStart.atZone(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli());
-    String oldestFixedRun = LocalDate.now().minusDays(8).toString();
-    fixedRuns.entrySet().removeIf(entry -> entry.getKey() == null || entry.getKey().compareTo(oldestFixedRun) < 0);
-    pendingTriggers.removeIf(item -> item == null || item.getDueAt() == null || item.getId().isBlank());
-    pendingRetries.removeIf(item -> item == null || item.getDueAt() == null || item.getId().isBlank());
+    dailyDate = today;
+    dailyTargets.clear();
+    legacyUnattributedSentToday = false;
+    return true;
   }
 
-  public Map<String, Long> getPerTarget() {
-    return perTarget;
+  public boolean hasAttempted(String target) {
+    normalize();
+    return dailyTargets.containsKey(TargetNames.key(target));
   }
 
-  public void setPerTarget(Map<String, Long> perTarget) {
-    this.perTarget = perTarget;
+  public void beginAttempt(String target, LocalDateTime now) {
+    normalize();
+    dailyTargets.put(TargetNames.key(target), new DailyTargetResult(target, "PROCESSING", "正在处理", now));
   }
 
-  public Map<String, Boolean> getFixedRuns() {
-    return fixedRuns;
+  public void recordResult(String target, String resultStatus, String detail, LocalDateTime now) {
+    normalize();
+    dailyTargets.put(TargetNames.key(target), new DailyTargetResult(target, resultStatus, detail, now));
   }
 
-  public void setFixedRuns(Map<String, Boolean> fixedRuns) {
-    this.fixedRuns = fixedRuns;
+  public int confirmedCount(List<String> targets) {
+    normalize();
+    return (int) targets.stream()
+        .map(target -> dailyTargets.get(TargetNames.key(target)))
+        .filter(item -> item != null && ("SENT".equals(item.getStatus()) || "MIGRATED_SENT".equals(item.getStatus())))
+        .count();
   }
 
-  public LocalDate getSentDate() {
-    return sentDate;
+  public boolean hasAttemptedAll(List<String> targets) {
+    normalize();
+    return targets.stream().allMatch(this::hasAttempted);
   }
 
-  public void setSentDate(LocalDate sentDate) {
-    this.sentDate = sentDate;
+  public LocalDate getDailyDate() {
+    return dailyDate;
   }
 
-  public int getSentToday() {
-    return sentToday;
+  public void setDailyDate(LocalDate dailyDate) {
+    this.dailyDate = dailyDate;
   }
 
-  public void setSentToday(int sentToday) {
-    this.sentToday = sentToday;
+  public Map<String, DailyTargetResult> getDailyTargets() {
+    return dailyTargets;
   }
 
-  public LocalDateTime getNextIntervalRunAt() {
-    return nextIntervalRunAt;
+  public void setDailyTargets(Map<String, DailyTargetResult> dailyTargets) {
+    this.dailyTargets = dailyTargets;
   }
 
-  public void setNextIntervalRunAt(LocalDateTime nextIntervalRunAt) {
-    this.nextIntervalRunAt = nextIntervalRunAt;
+  public boolean isLegacyUnattributedSentToday() {
+    return legacyUnattributedSentToday;
   }
 
-  public List<PendingTrigger> getPendingTriggers() {
-    return pendingTriggers;
-  }
-
-  public void setPendingTriggers(List<PendingTrigger> pendingTriggers) {
-    this.pendingTriggers = pendingTriggers;
-  }
-
-  public List<PendingRetry> getPendingRetries() {
-    return pendingRetries;
-  }
-
-  public void setPendingRetries(List<PendingRetry> pendingRetries) {
-    this.pendingRetries = pendingRetries;
+  public void setLegacyUnattributedSentToday(boolean legacyUnattributedSentToday) {
+    this.legacyUnattributedSentToday = legacyUnattributedSentToday;
   }
 
   public String getBlockedReason() {
