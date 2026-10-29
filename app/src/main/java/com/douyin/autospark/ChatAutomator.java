@@ -36,6 +36,7 @@ public class ChatAutomator implements AutoCloseable {
   private Page page;
   private String automationScript;
   private Boolean browserHeadless;
+  private boolean interactiveBrowserRequested;
 
   public ChatAutomator(AccountPaths paths, ChineseLogger logger) {
     this.paths = paths;
@@ -44,8 +45,20 @@ public class ChatAutomator implements AutoCloseable {
 
   public synchronized void openBrowserForLogin() {
     Page current = ensureChatPage(false);
+    interactiveBrowserRequested = true;
     current.bringToFront();
     logger.info("已打开创作者聊天页。如页面要求登录，请在浏览器中扫码或完成验证；程序会复用本次登录状态。");
+  }
+
+  public synchronized void closeAfterAutomaticCycle() {
+    if (hasOpenInteractiveBrowser()) {
+      return;
+    }
+    boolean browserWasOpen = context != null;
+    closeBrowserResources();
+    if (browserWasOpen) {
+      logger.info("每日自动化任务结束，已关闭本次浏览器以释放资源；账号登录资料已保留。");
+    }
   }
 
   public synchronized void keepLoginSessionDurable() {
@@ -258,7 +271,24 @@ public class ChatAutomator implements AutoCloseable {
   }
 
   private boolean shouldRunHeadless(AppConfig config) {
-    return config.isHeadlessMode() || !DesktopSession.isInteractiveDesktopAvailable();
+    if (!DesktopSession.isInteractiveDesktopAvailable()) {
+      return true;
+    }
+    if (hasOpenInteractiveBrowser()) {
+      return false;
+    }
+    return config.isHeadlessMode();
+  }
+
+  private boolean hasOpenInteractiveBrowser() {
+    if (!interactiveBrowserRequested || context == null || !Boolean.FALSE.equals(browserHeadless)) {
+      return false;
+    }
+    try {
+      return !context.isClosed();
+    } catch (RuntimeException ignored) {
+      return false;
+    }
   }
 
   private String automationExpression() {
@@ -353,11 +383,7 @@ public class ChatAutomator implements AutoCloseable {
     }
     BrowserType.LaunchPersistentContextOptions options = new BrowserType.LaunchPersistentContextOptions()
         .setHeadless(headless)
-        .setTimeout(45000)
-        .setArgs(List.of(
-            "--disable-background-timer-throttling",
-            "--disable-backgrounding-occluded-windows",
-            "--disable-renderer-backgrounding"));
+        .setTimeout(45000);
     Path bundledChrome = findBundledChrome();
     if (bundledChrome == null) {
       throw new IllegalStateException("未找到程序内置 Chromium 浏览器文件 chrome.exe，请完整解压程序包后再运行。");
@@ -573,6 +599,7 @@ public class ChatAutomator implements AutoCloseable {
       playwright = null;
     }
     browserHeadless = null;
+    interactiveBrowserRequested = false;
   }
 
   private void persistLoginSessionCookies(boolean writeLog) {

@@ -77,3 +77,47 @@
 - 当前阶段：构建、界面验证、差异审查和本地提交完成。
 - 阻塞：工具策略拦截清理 `build/visual-audit-final-data`；这是隔离界面检查数据，应用进程已关闭，目录未进入 Git 或发布包。
 - 下一步：无；远端未推送，避免触发自动 Release。
+
+## 第三轮：Chromium 内存与 CPU 占用
+
+### 目标与验收
+
+- 减少浏览器空闲期间持续占用的内存与 CPU，同时保留独立登录资料和每日发送能力。
+- 自动任务默认使用无界面 Chromium；正常任务结束、部分失败或安全暂停后关闭自动化浏览器，释放 Chromium 进程。
+- 用户显式打开的登录窗口保持可用；自动发送不得在用户主动使用窗口时强行关闭它。
+- 删除禁用 Chromium 后台节流的自定义启动参数；旧配置兼容，保留用户明确设置的可见运行偏好。
+- 增加生命周期与启动参数回归检查，更新说明，执行全量测试和 Windows 构建，核验产物与版本。
+
+### Resource status
+
+- **VERIFIED** — Codex 用量工具，最终构建后复查：5 小时窗口已用 54%（剩余 46%），周窗口已用 54%（剩余 46%），普通用量允许；无额外 credits。
+
+### 检查结论与设计
+
+- 浏览器按需启动，但被打开的持久化上下文会常驻；自动任务结束没有释放 Chromium。默认配置以有界面模式运行。
+- `ChatAutomator` 额外传入 `--disable-background-timer-throttling`、`--disable-backgrounding-occluded-windows` 和 `--disable-renderer-backgrounding`，会主动关闭 Chromium 的后台资源节流。
+- 默认自动任务改为 headless；`openBrowserForLogin()` 明确打开的可见窗口标记为用户会话，任务结束时保留。其他自动化上下文关闭前仍运行 cookie 持久化，保留登录资料。
+- Cookie 持久化仍保持原 15 秒检查频率；将其放慢对浏览器负载帮助有限，但会延长突然退出时的会话保存窗口。
+- Playwright 官方说明关闭持久化 context 会关闭浏览器；Chrome 官方文档说明后台计时器节流用于限制后台 CPU。仅依赖这些已验证行为，不额外添加未经证实的 Chromium 魔法参数。
+
+### 任务
+
+- [x] 用量预检；检查工作区、版本、Chromium 参数、调度器及浏览器开关/关闭路径。
+- [x] 默认开启 headless 自动发送；区分用户手动打开的可见登录会话与自动化会话，并在每日工作结束后释放自动化浏览器。
+- [x] 移除禁用后台节流的启动参数；增加浏览器生命周期和启动参数回归测试。
+- [x] 更新用户说明并通过定向 Maven 测试（`AutoRunnerTest`、`AppConfigTest`、`BrowserInteractionSourceTest`、`BrowserLoginPersistenceTest`）。
+- [x] 干净运行完整 Maven 测试：32 项通过、0 失败/错误/跳过。
+- [x] 执行 1.0.62 Windows 发布构建；确认 `PLUGIN` 唯一 ZIP 与构建 JAR 哈希一致，三处版本号同步。
+- [x] 检查实际界面、空闲进程和最终差异；`git diff --check` 通过。
+- [x] 本地提交，不推送远端。
+
+### 检查点
+
+- 基线：分支 `codex/optimize-log-window`，版本 1.0.61，工作区干净；现有完整测试基线 32 项通过。
+- 定向验证：4 个 Maven 测试类运行成功，退出码 0；覆盖默认无界面、任务结束释放、启动参数以及关闭前登录态持久化。
+- 全量验证：`mvn -q clean test` 通过；Surefire 汇总 32 项、0 失败/错误/跳过；`git diff --check` 通过。
+- 发布验证：`build.ps1` 退出码 0、版本 1.0.62；唯一发布文件为 `PLUGIN/douyin-auto-spark-1.0.62-windows.zip`，包内主 JAR SHA-256 与 `target` 构建 JAR 相同。
+- 桌面验证：隔离配置下启动 1.0.62，确认运行维护中的无界面选项默认勾选；空名单时应用进程下无 Chromium 进程。未使用真实登录或发送。
+- 当前阶段：实现、界面检查、验证和本地提交完成。
+- 阻塞：清理 `build/visual-audit-1.0.62`；此前同类递归清理被系统策略拦截，因此保留本次隔离检查目录。它只包含默认配置、日志、锁文件和启动项脚本，未进入 Git 或发布包。
+- 下一步：无；不推送远端。

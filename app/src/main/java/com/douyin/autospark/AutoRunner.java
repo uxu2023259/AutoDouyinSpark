@@ -117,10 +117,17 @@ public class AutoRunner implements AutoCloseable {
 
   private void queueDailyCycle() {
     if (!cycleQueued.compareAndSet(false, true)) return;
-    worker.submit(() -> {
+    try {
+      worker.submit(() -> {
+        try {
+          runDailyCycle();
+        } finally {
+          cycleQueued.set(false);
+        }
+      });
+    } catch (java.util.concurrent.RejectedExecutionException ignored) {
       cycleQueued.set(false);
-      runDailyCycle();
-    });
+    }
   }
 
   void runDailyCycle() {
@@ -194,6 +201,11 @@ public class AutoRunner implements AutoCloseable {
         logger.exception("读取中断后的每日发送状态失败", statusError);
       }
     } finally {
+      try {
+        automator.closeAfterAutomaticCycle();
+      } catch (RuntimeException error) {
+        logger.warn("关闭每日自动化浏览器时遇到问题：" + error.getMessage());
+      }
       running.set(false);
     }
   }

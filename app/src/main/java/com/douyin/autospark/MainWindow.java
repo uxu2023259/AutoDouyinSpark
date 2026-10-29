@@ -60,7 +60,7 @@ public class MainWindow extends JFrame {
   private final JLabel runtimeStatus = new JLabel("运行状态：读取中");
   private final JLabel saveStatus = new JLabel("配置修改后请保存");
   private final JCheckBox enabled = new JCheckBox("启用每日自动发送");
-  private final JCheckBox headlessMode = new JCheckBox("服务器无界面模式（首次登录后启用）");
+  private final JCheckBox headlessMode = new JCheckBox("自动发送使用无界面浏览器（推荐）");
   private final JCheckBox startWithWindows = new JCheckBox("Windows 登录后自动启动整个程序");
   private final JTextField dailyTime = new JTextField("16:00", 8);
   private final JTextArea targets = new JTextArea(8, 28);
@@ -236,7 +236,7 @@ public class MainWindow extends JFrame {
     JPanel panel = new JPanel();
     panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
     panel.setBorder(BorderFactory.createEmptyBorder(18, 18, 18, 18));
-    panel.add(sectionCard("服务器运行", "无界面模式使用当前账号独立的浏览器资料目录，不依赖窗口刷新或前台焦点。", headlessMode));
+    panel.add(sectionCard("浏览器资源", "每日自动发送结束后会关闭浏览器以释放资源；显式打开的登录窗口会保持可用。", headlessMode));
     panel.add(Box.createVerticalStrut(12));
     panel.add(sectionCard("全局启动", "此设置作用于整个程序；程序启动后会同时守护所有已启用账号。", startWithWindows));
     panel.add(Box.createVerticalStrut(12));

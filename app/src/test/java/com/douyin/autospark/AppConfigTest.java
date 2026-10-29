@@ -21,6 +21,7 @@ class AppConfigTest {
     assertEquals(List.of("张三 同学", "李四"), config.getTargets());
     assertTrue(config.getMessageText().contains("续火花"));
     assertEquals("16:00", AppConfig.defaults().getDailyTime());
+    assertTrue(AppConfig.defaults().isHeadlessMode());
   }
 
   @Test

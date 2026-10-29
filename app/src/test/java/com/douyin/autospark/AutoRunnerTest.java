@@ -36,6 +36,7 @@ class AutoRunnerTest {
     assertEquals("NOT_FOUND", state.getDailyTargets().get("查无此人").getStatus());
     assertEquals("AMBIGUOUS", state.getDailyTargets().get("重名").getStatus());
     assertEquals("SENT", state.getDailyTargets().get("李四").getStatus());
+    assertEquals(2, automator.automaticCycleCloseCount);
     assertTrue(logs.stream().anyMatch(line -> line.contains("今日名单已处理完，但并非全部发送成功")));
     assertFalse(logs.stream().anyMatch(line -> line.contains("今日名单全部发送成功")));
   }
@@ -58,6 +59,7 @@ class AutoRunnerTest {
     assertTrue(state.getBlockedReason().contains("安全验证"));
     assertTrue(logs.stream().anyMatch(line -> line.contains("剩余 1 位未处理")));
     assertFalse(logs.stream().anyMatch(line -> line.contains("今日名单全部发送成功")));
+    assertEquals(1, automator.automaticCycleCloseCount);
   }
 
   private ConfigStore store(String name, List<String> targets) throws Exception {
@@ -83,6 +85,7 @@ class AutoRunnerTest {
   private static final class FakeAutomator extends ChatAutomator {
     private final List<String> sentTargets = new ArrayList<>();
     private String blockTarget = "";
+    private int automaticCycleCloseCount;
 
     private FakeAutomator(AccountPaths paths) {
       super(paths, new ChineseLogger(new AppPaths(paths.accountDir().resolve("logs"))));
@@ -129,6 +132,11 @@ class AutoRunnerTest {
 
     @Override
     public synchronized void keepLoginSessionDurable() {}
+
+    @Override
+    public synchronized void closeAfterAutomaticCycle() {
+      automaticCycleCloseCount++;
+    }
 
     @Override
     public synchronized void close() {}

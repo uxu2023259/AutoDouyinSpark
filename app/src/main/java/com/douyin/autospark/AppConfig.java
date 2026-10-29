@@ -17,7 +17,7 @@ public class AppConfig {
   private List<String> targets = new ArrayList<>();
   private String messageText = "续火花啦，记得回我一下~";
   private boolean startWithWindows = true;
-  private boolean headlessMode = false;
+  private boolean headlessMode = true;
 
   public static AppConfig defaults() {
     return new AppConfig();

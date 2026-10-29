@@ -29,6 +29,13 @@ class BrowserInteractionSourceTest {
     assertFalse(source.contains("humanizationPreset"));
     assertFalse(source.contains("randomBetween"));
     assertFalse(source.contains("AutomationControlled"));
+    assertFalse(source.contains("--disable-background-timer-throttling"));
+    assertFalse(source.contains("--disable-backgrounding-occluded-windows"));
+    assertFalse(source.contains("--disable-renderer-backgrounding"));
+    assertTrue(source.contains("closeAfterAutomaticCycle()"));
+    assertTrue(source.contains("interactiveBrowserRequested = true"));
+    assertTrue(source.contains("if (hasOpenInteractiveBrowser())"));
+    assertTrue(source.indexOf("persistLoginSessionCookies(false)") < source.indexOf("context.close();"));
     assertFalse(script.contains("dispatchMouseSequence"));
     assertFalse(script.contains("runChatSend"));
     assertFalse(script.contains("reconcile-human-message"));
