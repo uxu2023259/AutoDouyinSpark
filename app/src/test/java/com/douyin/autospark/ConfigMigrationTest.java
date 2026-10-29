@@ -49,7 +49,7 @@ class ConfigMigrationTest {
   }
 
   @Test
-  void migratesTodaySendHistoryAndCancelsOldRetriesWithoutResending() throws Exception {
+  void migratesTodayAttemptsAsUnconfirmedAndRestoresOldRetries() throws Exception {
     AccountPaths paths = new AccountPaths(tempDir.resolve("状态兼容账号"));
     paths.ensureDirectories();
     LocalDateTime now = LocalDateTime.now();
@@ -74,7 +74,8 @@ class ConfigMigrationTest {
 
     SendState state = new ConfigStore(paths).loadState();
 
-    assertEquals("MIGRATED_SENT", state.getDailyTargets().get("好友").getStatus());
+    assertEquals("UNCERTAIN", state.getDailyTargets().get("好友").getStatus());
+    assertEquals(1, state.getDailyTargets().get("好友").getAttemptCount());
     assertEquals("UNCERTAIN", state.getDailyTargets().get("另一个").getStatus());
     String migrated = Files.readString(paths.statePath(), StandardCharsets.UTF_8);
     assertFalse(migrated.contains("pendingRetries"));
@@ -82,7 +83,7 @@ class ConfigMigrationTest {
   }
 
   @Test
-  void pausesTodayWhenLegacySuccessfulSendsCannotBeMatchedToUsers() throws Exception {
+  void doesNotBlockConfiguredTargetsForUnattributedLegacySends() throws Exception {
     AccountPaths paths = new AccountPaths(tempDir.resolve("不明发送账号"));
     paths.ensureDirectories();
     Files.writeString(paths.statePath(), """
@@ -91,7 +92,7 @@ class ConfigMigrationTest {
 
     SendState state = new ConfigStore(paths).loadState();
 
-    assertTrue(state.isLegacyUnattributedSentToday());
+    assertFalse(state.hasConfirmedAll(List.of("指定用户")));
     assertTrue(state.getDailyTargets().isEmpty());
   }
 }

@@ -10,14 +10,20 @@ public class DailyTargetResult {
   private String status = "";
   private String detail = "";
   private LocalDateTime attemptedAt;
+  private int attemptCount;
 
   public DailyTargetResult() {}
 
   public DailyTargetResult(String target, String status, String detail, LocalDateTime attemptedAt) {
+    this(target, status, detail, attemptedAt, 0);
+  }
+
+  public DailyTargetResult(String target, String status, String detail, LocalDateTime attemptedAt, int attemptCount) {
     this.target = TargetNames.displayName(target);
     this.status = status == null ? "" : status;
     this.detail = detail == null ? "" : detail;
     this.attemptedAt = attemptedAt;
+    this.attemptCount = Math.max(0, attemptCount);
   }
 
   public String getTarget() {
@@ -50,5 +56,13 @@ public class DailyTargetResult {
 
   public void setAttemptedAt(LocalDateTime attemptedAt) {
     this.attemptedAt = attemptedAt;
+  }
+
+  public int getAttemptCount() {
+    return attemptCount;
+  }
+
+  public void setAttemptCount(int attemptCount) {
+    this.attemptCount = Math.max(0, attemptCount);
   }
 }

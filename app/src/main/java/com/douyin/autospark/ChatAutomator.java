@@ -448,7 +448,7 @@ public class ChatAutomator implements AutoCloseable {
       return "浏览器页面或控制连接已关闭，程序将在下次任务中自动重建。";
     }
     if (message.contains("Timeout")) {
-      return "页面操作等待超时，已保留当前浏览器；本日不会自动重试该用户。";
+      return "页面操作等待超时，已保留当前浏览器；未确认用户会按重试计划再次处理。";
     }
     return "页面自动化操作未完成，已保留当前浏览器并等待后续处理。";
   }

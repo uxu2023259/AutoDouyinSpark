@@ -32,7 +32,8 @@ class AccountRegistryTest {
     AccountPaths legacyPaths = paths.account(legacy.getId());
     assertEquals("默认账号", legacy.getName());
     assertFalse(new ConfigStore(legacyPaths).loadConfig().isEnabled());
-    assertTrue(new ConfigStore(legacyPaths).loadState().isLegacyUnattributedSentToday());
+    assertFalse(new ConfigStore(legacyPaths).loadState().hasConfirmedAll(
+        new ConfigStore(legacyPaths).loadConfig().getTargets()));
     assertTrue(Files.exists(legacyPaths.browserProfileDir().resolve("登录态.txt")));
     assertFalse(Files.exists(paths.legacyConfigPath()));
 

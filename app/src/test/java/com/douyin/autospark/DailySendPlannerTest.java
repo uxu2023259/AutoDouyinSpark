@@ -27,13 +27,15 @@ class DailySendPlannerTest {
   }
 
   @Test
-  void persistsOneAttemptPerTargetAndResetsOnTheNextDay() {
+  void retriesUnconfirmedTargetsAfterBackoffAndResetsOnTheNextDay() {
     AppConfig config = config();
     SendState state = stateFor(LocalDate.of(2026, 8, 21));
     DailySendPlanner planner = plannerAt("2026-08-21T08:30:00Z");
 
     state.beginAttempt("小明", LocalDateTime.of(2026, 8, 21, 16, 30));
     assertEquals(List.of("小红"), planner.pendingTargets(config, state));
+    DailySendPlanner afterBackoff = plannerAt("2026-08-21T08:31:00Z");
+    assertEquals(List.of("小明", "小红"), afterBackoff.pendingTargets(config, state));
 
     assertTrue(state.rollOverIfNeeded(LocalDate.of(2026, 8, 22)));
     assertEquals(List.of("小明", "小红"), planner.pendingTargets(config, state));

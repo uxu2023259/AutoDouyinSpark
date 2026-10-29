@@ -5,6 +5,8 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Path;
 import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.ArrayList;
@@ -19,7 +21,7 @@ class AutoRunnerTest {
   Path tempDir;
 
   @Test
-  void processesEachConfiguredUserOnceAndReportsPartialFailuresAccurately() throws Exception {
+  void processesAllExactNameMatchesAndReportsRemainingTargetsAccurately() throws Exception {
     List<String> logs = new ArrayList<>();
     ConfigStore store = store("逐项处理", List.of("张三", "查无此人", "重名", "李四"));
     ChineseLogger logger = logger("逐项处理日志", logs);
@@ -30,15 +32,40 @@ class AutoRunnerTest {
       runner.runDailyCycle();
     }
 
-    assertEquals(List.of("张三", "李四"), automator.sentTargets);
+    assertEquals(List.of("张三", "重名", "重名", "李四"), automator.sentTargets);
     SendState state = store.loadState();
     assertEquals("SENT", state.getDailyTargets().get("张三").getStatus());
     assertEquals("NOT_FOUND", state.getDailyTargets().get("查无此人").getStatus());
-    assertEquals("AMBIGUOUS", state.getDailyTargets().get("重名").getStatus());
+    assertEquals("SENT", state.getDailyTargets().get("重名").getStatus());
     assertEquals("SENT", state.getDailyTargets().get("李四").getStatus());
     assertEquals(2, automator.automaticCycleCloseCount);
-    assertTrue(logs.stream().anyMatch(line -> line.contains("今日名单已处理完，但并非全部发送成功")));
+    assertTrue(logs.stream().anyMatch(line -> line.contains("名单仍有待确认用户")));
+    assertTrue(logs.stream().anyMatch(line -> line.contains("将逐个尝试发送以覆盖名单目标")));
     assertFalse(logs.stream().anyMatch(line -> line.contains("今日名单全部发送成功")));
+  }
+
+  @Test
+  void retriesUnconfirmedUsersUntilConfirmedAndNeverRepeatsConfirmedUsers() throws Exception {
+    List<String> logs = new ArrayList<>();
+    ConfigStore store = store("持续重试", List.of("张三", "查无此人"));
+    ChineseLogger logger = logger("持续重试日志", logs);
+    FakeAutomator automator = new FakeAutomator(new AccountPaths(tempDir.resolve("持续重试浏览器")));
+    MutableClock clock = new MutableClock(LocalDate.now().atTime(16, 30).atZone(ZoneId.systemDefault()).toInstant(), ZoneId.systemDefault());
+
+    try (AutoRunner runner = new AutoRunner(store, automator, logger, clock)) {
+      runner.runDailyCycle();
+      assertEquals(List.of("张三"), automator.sentTargets);
+      assertEquals("NOT_FOUND", store.loadState().getDailyTargets().get("查无此人").getStatus());
+
+      clock.advance(Duration.ofMinutes(2));
+      automator.missingTargetAvailable = true;
+      runner.runDailyCycle();
+    }
+
+    assertEquals(List.of("张三", "查无此人"), automator.sentTargets);
+    SendState state = store.loadState();
+    assertTrue(state.hasConfirmedAll(List.of("张三", "查无此人")));
+    assertTrue(logs.stream().anyMatch(line -> line.contains("今日名单全部发送成功：2/2")));
   }
 
   @Test
@@ -55,9 +82,9 @@ class AutoRunnerTest {
 
     SendState state = store.loadState();
     assertEquals("PAUSED", state.getDailyTargets().get("张三").getStatus());
-    assertFalse(state.hasAttempted("李四"));
+    assertFalse(state.isConfirmed("李四"));
     assertTrue(state.getBlockedReason().contains("安全验证"));
-    assertTrue(logs.stream().anyMatch(line -> line.contains("剩余 1 位未处理")));
+    assertTrue(logs.stream().anyMatch(line -> line.contains("待确认 2 位")));
     assertFalse(logs.stream().anyMatch(line -> line.contains("今日名单全部发送成功")));
     assertEquals(1, automator.automaticCycleCloseCount);
   }
@@ -86,6 +113,7 @@ class AutoRunnerTest {
     private final List<String> sentTargets = new ArrayList<>();
     private String blockTarget = "";
     private int automaticCycleCloseCount;
+    private boolean missingTargetAvailable;
 
     private FakeAutomator(AccountPaths paths) {
       super(paths, new ChineseLogger(new AppPaths(paths.accountDir().resolve("logs"))));
@@ -93,7 +121,7 @@ class AutoRunnerTest {
 
     @Override
     public synchronized ConversationDiscoveryResult discoverConversations(AppConfig config, String target, String taskId) {
-      if ("查无此人".equals(target)) {
+      if ("查无此人".equals(target) && !missingTargetAvailable) {
         return ConversationDiscoveryResult.failed("TARGET_NOT_FOUND", "未找到完全同名会话");
       }
       ConversationDiscoveryResult result = new ConversationDiscoveryResult();
@@ -140,5 +168,34 @@ class AutoRunnerTest {
 
     @Override
     public synchronized void close() {}
+  }
+
+  private static final class MutableClock extends Clock {
+    private Instant instant;
+    private final ZoneId zone;
+
+    private MutableClock(Instant instant, ZoneId zone) {
+      this.instant = instant;
+      this.zone = zone;
+    }
+
+    private void advance(Duration duration) {
+      instant = instant.plus(duration);
+    }
+
+    @Override
+    public ZoneId getZone() {
+      return zone;
+    }
+
+    @Override
+    public Clock withZone(ZoneId zone) {
+      return new MutableClock(instant, zone);
+    }
+
+    @Override
+    public Instant instant() {
+      return instant;
+    }
   }
 }

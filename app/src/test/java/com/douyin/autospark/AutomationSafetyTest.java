@@ -9,7 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class AutomationSafetyTest {
   @Test
-  void selectsOnlyOneExactNameAndDoesNotSendWhenThatNameIsAmbiguous() throws Exception {
+  void selectsAllExactNameConversationsByStableIdentityWithoutFuzzyMatching() throws Exception {
     try (var input = AutomationSafetyTest.class.getResourceAsStream("/content-automation.js")) {
       assertTrue(input != null, "自动化脚本资源必须存在");
       String script = new String(input.readAllBytes(), StandardCharsets.UTF_8);
@@ -17,7 +17,9 @@ class AutomationSafetyTest {
       assertTrue(script.contains("TARGET_NOT_FOUND"));
       assertTrue(script.contains("TARGET_AMBIGUOUS"));
       assertTrue(script.contains("normalizeForMatch(item.name) === normalizedTarget"));
-      assertTrue(script.contains("scan.matches.length > 1"));
+      assertTrue(script.contains("identity: match.identity || match.locatorKey"));
+      assertTrue(script.contains("match.locatorKey === expectedIdentity"));
+      assertTrue(script.contains("Math.min(selectedBounds.height, session.actionBounds.height) * 0.3"));
       assertFalse(script.contains("containsMatches"));
       assertFalse(script.contains("normalizedName.includes(normalizedTarget)"));
       assertFalse(script.contains("duplicateName"));

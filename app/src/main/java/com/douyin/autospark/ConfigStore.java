@@ -116,7 +116,7 @@ public class ConfigStore {
   private boolean migrateState(ObjectNode json) {
     boolean hasLegacyState = json.has("sentDate") || json.has("sentToday") || json.has("perTarget")
         || json.has("fixedRuns") || json.has("pendingTriggers") || json.has("pendingRetries")
-        || json.has("nextIntervalRunAt");
+        || json.has("nextIntervalRunAt") || json.has("legacyUnattributedSentToday");
     if (!hasLegacyState) {
       return false;
     }
@@ -125,8 +125,6 @@ public class ConfigStore {
     ObjectNode dailyTargets = json.path("dailyTargets").isObject()
         ? ((ObjectNode) json.path("dailyTargets")).deepCopy()
         : mapper.createObjectNode();
-    int migratedSentCount = 0;
-    boolean unattributed = json.path("legacyUnattributedSentToday").asBoolean(false);
     LocalDate oldSentDate = parseDate(json.path("sentDate").asText(""));
     if (oldSentDate == null && json.path("sentToday").asInt(0) > 0) {
       oldSentDate = today;
@@ -146,25 +144,21 @@ public class ConfigStore {
         }
         String target = legacyTargetName(entry.getKey());
         if (target.isBlank()) {
-          unattributed = true;
           continue;
         }
         ObjectNode result = dailyTargets.putObject(TargetNames.key(target));
         result.put("target", target);
-        result.put("status", "MIGRATED_SENT");
-        result.put("detail", "从旧版本的当日成功记录迁移");
+        result.put("status", "UNCERTAIN");
+        result.put("detail", "旧版本只记录了尝试，迁移为待确认并继续重试");
         result.put("attemptedAt", attemptedAt.toString());
-        migratedSentCount++;
+        result.put("attemptCount", 1);
       }
-    }
-    if (today.equals(oldSentDate) && json.path("sentToday").asInt(0) > migratedSentCount) {
-      unattributed = true;
     }
 
     var retries = json.path("pendingRetries");
     if (retries.isArray()) {
       for (var retry : retries) {
-        if (!retry.isObject() || retry.path("discoveryRetry").asBoolean(false)) {
+        if (!retry.isObject()) {
           continue;
         }
         String target = TargetNames.displayName(retry.path("conversation").path("name").asText(""));
@@ -172,24 +166,24 @@ public class ConfigStore {
           target = TargetNames.displayName(retry.path("query").asText(""));
         }
         LocalDateTime attemptedAt = parseDateTime(retry.path("attemptedAt").asText(""));
-        if (!target.isBlank() && attemptedAt != null && attemptedAt.toLocalDate().equals(today)) {
+        if (!target.isBlank() && (attemptedAt == null || attemptedAt.toLocalDate().equals(today))) {
           ObjectNode result = dailyTargets.putObject(TargetNames.key(target));
           result.put("target", target);
           String outcome = retry.path("outcome").asText("");
           result.put("status", "UNCERTAIN".equals(outcome) ? "UNCERTAIN" : "FAILED");
-          result.put("detail", "旧版本的待重试任务已取消，不会在今天自动重复发送");
-          result.put("attemptedAt", attemptedAt.toString());
-        } else if (attemptedAt == null && "UNCERTAIN".equals(retry.path("outcome").asText(""))) {
-          unattributed = true;
+          result.put("detail", "旧版本的待重试任务已恢复为未确认目标");
+          if (attemptedAt != null) {
+            result.put("attemptedAt", attemptedAt.toString());
+          }
+          result.put("attemptCount", 1);
         }
       }
     }
 
     json.put("dailyDate", today.toString());
     json.set("dailyTargets", dailyTargets);
-    json.put("legacyUnattributedSentToday", unattributed);
     return removeFields(json, "sentDate", "sentToday", "perTarget", "fixedRuns", "pendingTriggers",
-        "pendingRetries", "nextIntervalRunAt");
+        "pendingRetries", "nextIntervalRunAt", "legacyUnattributedSentToday");
   }
 
   private boolean removeFields(ObjectNode json, String... fields) {

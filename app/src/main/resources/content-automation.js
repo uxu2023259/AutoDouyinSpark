@@ -398,7 +398,11 @@ async function scanMatchingConversations(target, selectorTrace) {
     await sleep(500);
   }
 
-  return { ok: true, matches: [...exactMatches.values()], selectorTrace };
+  const matches = [...exactMatches.entries()].map(([locatorKey, match]) => ({
+    ...match,
+    locatorKey
+  }));
+  return { ok: true, matches, selectorTrace };
 }
 
 async function discoverTargetConversations(target, selectorTrace) {
@@ -413,17 +417,10 @@ async function discoverTargetConversations(target, selectorTrace) {
     });
   }
 
-  if (scan.matches.length > 1) {
-    return createFailure("TARGET_AMBIGUOUS", `找到 ${scan.matches.length} 个同名会话，无法确认指定用户：${target}`, {
-      phase: PHASES.LOCATING_TARGET,
-      selectorTrace
-    });
-  }
-
   const conversations = scan.matches.map((match) => ({
     query: target,
     name: match.name,
-    identity: match.identity
+    identity: match.identity || match.locatorKey
   }));
 
   return {
@@ -439,20 +436,22 @@ async function findTargetConversation(conversation, selectorTrace) {
   const expectedIdentity = conversation.identity || "";
   const scan = await scanMatchingConversations(target, selectorTrace);
   if (!scan.ok) return scan;
-  if (scan.matches.length > 1) {
-    return createFailure("TARGET_AMBIGUOUS", `找到 ${scan.matches.length} 个同名会话，无法确认指定用户：${target}`, {
-      phase: PHASES.LOCATING_TARGET,
-      selectorTrace
-    });
-  }
   if (!scan.matches.length) {
     return createFailure("TARGET_NOT_FOUND", `左侧列表未找到目标会话：${target}`, {
       phase: PHASES.LOCATING_TARGET,
       selectorTrace
     });
   }
-  const uniqueMatch = scan.matches[0];
-  if (expectedIdentity && uniqueMatch.identity !== expectedIdentity) {
+  if (!expectedIdentity && scan.matches.length > 1) {
+    return createFailure("TARGET_AMBIGUOUS", `找到 ${scan.matches.length} 个同名会话，但没有可用于区分的会话标识：${target}`, {
+      phase: PHASES.LOCATING_TARGET,
+      selectorTrace
+    });
+  }
+  const uniqueMatch = expectedIdentity
+    ? scan.matches.find((match) => match.identity === expectedIdentity || match.locatorKey === expectedIdentity)
+    : scan.matches.length === 1 ? scan.matches[0] : null;
+  if (!uniqueMatch) {
     return createFailure("TARGET_CHANGED", `目标用户“${target}”的会话标识已变化；未发送`, {
       phase: PHASES.LOCATING_TARGET,
       selectorTrace
@@ -474,8 +473,10 @@ async function findTargetConversation(conversation, selectorTrace) {
     const items = getClickableConversationItems(selectorTrace)
       .map((node) => ({ node, name: getConversationName(node), identity: getConversationIdentity(node) }))
       .filter((item) => item.name && normalizeForMatch(item.name) === normalizeForMatch(target));
-    const identityMatch = expectedIdentity && items.find((item) => item.identity === expectedIdentity);
-    const match = identityMatch || (!expectedIdentity ? items[0] : null);
+    const identityMatch = expectedIdentity && items.find((item) => (
+      item.identity === expectedIdentity || conversationKey(item, list) === expectedIdentity
+    ));
+    const match = identityMatch || (!expectedIdentity && items.length === 1 ? items[0] : null);
     if (match) {
       return {
         ok: true,
@@ -668,11 +669,16 @@ async function verifyTargetSwitch(input) {
     const selectedBounds = elementBounds(selectedItem);
     const identityConfirmed = Boolean(session.conversation.identity)
       && selectedIdentity === session.conversation.identity;
+    const sameRowTolerance = selectedBounds && session.actionBounds
+      ? Math.max(3, Math.min(selectedBounds.height, session.actionBounds.height) * 0.3)
+      : 0;
     const sameVisualRow = Boolean(selectedBounds)
       && normalizeForMatch(getConversationName(selectedItem)) === normalizeForMatch(target)
-      && Math.abs(selectedBounds.y - session.actionBounds.y) <= Math.max(selectedBounds.height, session.actionBounds.height) * 1.5;
+      && Math.abs(selectedBounds.y - session.actionBounds.y) <= sameRowTolerance;
     const ordinaryConfirmed = matchesTarget(headerName, target) || matchesTarget(selectedName, target);
-    const confirmed = identityConfirmed || sameVisualRow || ordinaryConfirmed;
+    const confirmed = session.conversation.identity
+      ? identityConfirmed || sameVisualRow
+      : ordinaryConfirmed;
     return confirmed ? { headerName, selectedName } : null;
   }, WAIT_TIMEOUT, 250);
   if (!switched) {

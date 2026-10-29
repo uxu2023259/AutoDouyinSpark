@@ -128,7 +128,7 @@ public class MainWindow extends JFrame {
     save.addActionListener(_event -> saveSelectedAccount());
     login.addActionListener(_event -> selectedRuntime().runner().openBrowserForLogin());
     resumeAutomatic.setEnabled(false);
-    resumeAutomatic.setToolTipText("仅解除安全暂停，不会立即发送；剩余用户仍由每日计划处理。");
+    resumeAutomatic.setToolTipText("解除安全暂停后，未确认用户会按重试计划继续处理；结果不确定时可能重复发送。");
     resumeAutomatic.addActionListener(_event -> resumeSelectedAccount());
     actions.add(login);
     actions.add(resumeAutomatic);
@@ -201,9 +201,9 @@ public class MainWindow extends JFrame {
     form.setBorder(BorderFactory.createEmptyBorder(18, 18, 24, 18));
     int row = 0;
     addWideRow(form, row++, "账号开关", enabled, "关闭后只暂停当前账号，不影响其他账号。");
-    addWideRow(form, row++, "指定用户", scrollArea(targets), "每行填写一个完整用户名；只匹配同名会话，找不到或重名时不会发送。");
-    addWideRow(form, row++, "每日发送时间", fieldGroup("本机时间（HH:mm）", dailyTime), "每天到时后按名单逐一处理；程序晚启动时会继续处理当天未处理的用户。");
-    addWideRow(form, row++, "发送内容", scrollArea(messageText), "每位指定用户每天最多尝试发送一次，发送后会核验结果。");
+    addWideRow(form, row++, "指定用户", scrollArea(targets), "每行填写完整用户名；多个完全同名会话会逐个尝试，可能重复发送。");
+    addWideRow(form, row++, "每日发送时间", fieldGroup("本机时间（HH:mm）", dailyTime), "到时后按名单处理；未确认用户会持续重试，直到确认或需要人工处理。");
+    addWideRow(form, row++, "发送内容", scrollArea(messageText), "只有核验成功才算完成；发送结果不确定时重试可能造成重复消息。");
 
     JPanel panel = new JPanel(new BorderLayout(0, 10));
     panel.add(new JScrollPane(form), BorderLayout.CENTER);
@@ -504,12 +504,11 @@ public class MainWindow extends JFrame {
       String runningText = runtime.runner().isRunning() ? "正在执行" : config.isEnabled() ? "守护中" : "已停用";
       String blocked = state.getBlockedReason().isBlank() ? "" : " · 需人工处理";
       int total = config.getTargets().size();
-      int attempted = (int) config.getTargets().stream().filter(state::hasAttempted).count();
-      String nextRun = state.isLegacyUnattributedSentToday()
-          ? "旧版发送记录待跨日清除"
-          : runtime.runner().planner().nextRunDescription(config, state);
+      int confirmed = state.confirmedCount(config.getTargets());
+      int pending = Math.max(0, total - confirmed);
+      String nextRun = runtime.runner().planner().nextRunDescription(config, state);
       runtimeStatus.setText("运行状态：" + runningText + blocked + " · 今日确认 " + state.confirmedCount(config.getTargets()) + "/" + total
-          + " · 已处理 " + attempted + "/" + total + " · 计划 " + nextRun);
+          + " · 待确认 " + pending + "/" + total + " · 计划 " + nextRun);
       resumeAutomatic.setEnabled(!state.getBlockedReason().isBlank());
     } catch (IOException error) {
       runtimeStatus.setText("运行状态：读取失败");
@@ -520,7 +519,7 @@ public class MainWindow extends JFrame {
     AccountProfile profile = accountList.getSelectedValue();
     if (profile == null) return;
     int answer = JOptionPane.showConfirmDialog(this,
-        "确认已在浏览器完成登录或安全验证？\n此操作只解除暂停，不会立即发送；剩余用户仍由每日计划处理。",
+        "确认已在浏览器完成登录或安全验证？\n解除暂停后，未确认用户会按重试计划继续处理；结果不确定时可能重复发送。",
         "恢复每日发送", JOptionPane.OK_CANCEL_OPTION, JOptionPane.WARNING_MESSAGE);
     if (answer == JOptionPane.OK_OPTION) {
       selectedRuntime().runner().resumeAutomaticWork();

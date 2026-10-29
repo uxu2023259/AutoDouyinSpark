@@ -12,7 +12,6 @@ import java.util.Map;
 public class SendState {
   private LocalDate dailyDate = LocalDate.now();
   private Map<String, DailyTargetResult> dailyTargets = new LinkedHashMap<>();
-  private boolean legacyUnattributedSentToday;
   private String blockedReason = "";
 
   public static SendState defaults() {
@@ -39,36 +38,42 @@ public class SendState {
     }
     dailyDate = today;
     dailyTargets.clear();
-    legacyUnattributedSentToday = false;
     return true;
   }
 
-  public boolean hasAttempted(String target) {
+  public boolean isConfirmed(String target) {
     normalize();
-    return dailyTargets.containsKey(TargetNames.key(target));
+    DailyTargetResult result = dailyTargets.get(TargetNames.key(target));
+    return result != null && "SENT".equals(result.getStatus());
   }
 
   public void beginAttempt(String target, LocalDateTime now) {
     normalize();
-    dailyTargets.put(TargetNames.key(target), new DailyTargetResult(target, "PROCESSING", "正在处理", now));
+    String key = TargetNames.key(target);
+    DailyTargetResult previous = dailyTargets.get(key);
+    int attemptCount = previous == null ? 1 : previous.getAttemptCount() + 1;
+    dailyTargets.put(key, new DailyTargetResult(target, "PROCESSING", "正在处理", now, attemptCount));
   }
 
   public void recordResult(String target, String resultStatus, String detail, LocalDateTime now) {
     normalize();
-    dailyTargets.put(TargetNames.key(target), new DailyTargetResult(target, resultStatus, detail, now));
+    String key = TargetNames.key(target);
+    DailyTargetResult previous = dailyTargets.get(key);
+    int attemptCount = previous == null ? 0 : previous.getAttemptCount();
+    dailyTargets.put(key, new DailyTargetResult(target, resultStatus, detail, now, attemptCount));
   }
 
   public int confirmedCount(List<String> targets) {
     normalize();
     return (int) targets.stream()
         .map(target -> dailyTargets.get(TargetNames.key(target)))
-        .filter(item -> item != null && ("SENT".equals(item.getStatus()) || "MIGRATED_SENT".equals(item.getStatus())))
+        .filter(item -> item != null && "SENT".equals(item.getStatus()))
         .count();
   }
 
-  public boolean hasAttemptedAll(List<String> targets) {
+  public boolean hasConfirmedAll(List<String> targets) {
     normalize();
-    return targets.stream().allMatch(this::hasAttempted);
+    return targets.stream().allMatch(this::isConfirmed);
   }
 
   public LocalDate getDailyDate() {
@@ -85,14 +90,6 @@ public class SendState {
 
   public void setDailyTargets(Map<String, DailyTargetResult> dailyTargets) {
     this.dailyTargets = dailyTargets;
-  }
-
-  public boolean isLegacyUnattributedSentToday() {
-    return legacyUnattributedSentToday;
-  }
-
-  public void setLegacyUnattributedSentToday(boolean legacyUnattributedSentToday) {
-    this.legacyUnattributedSentToday = legacyUnattributedSentToday;
   }
 
   public String getBlockedReason() {

@@ -6,7 +6,9 @@ import java.time.LocalDate;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -24,7 +26,6 @@ public class AutoRunner implements AutoCloseable {
   private final AtomicBoolean running = new AtomicBoolean(false);
   private final AtomicBoolean cycleQueued = new AtomicBoolean(false);
   private final AtomicBoolean loginMaintenanceQueued = new AtomicBoolean(false);
-  private final AtomicBoolean legacyPauseLogged = new AtomicBoolean(false);
   private final Deque<TaskResult> recentResults = new ArrayDeque<>();
 
   public AutoRunner(ConfigStore store, ChatAutomator automator, ChineseLogger logger) {
@@ -45,7 +46,7 @@ public class AutoRunner implements AutoCloseable {
   public void start(long initialDelaySeconds) {
     scheduler.scheduleWithFixedDelay(this::scheduledTick, Math.max(1, initialDelaySeconds), 5, TimeUnit.SECONDS);
     scheduler.scheduleWithFixedDelay(this::scheduleLoginMaintenance, 15, 15, TimeUnit.SECONDS);
-    logger.info("每日自动发送已启动；每个目标每天最多处理一次，并按名单逐项记录结果。");
+    logger.info("每日自动发送已启动；按名单逐项处理，直到每位用户都获得确认结果。未确认目标会持久化并继续重试。");
   }
 
   public void resumeAutomaticWork() {
@@ -59,7 +60,7 @@ public class AutoRunner implements AutoCloseable {
         String reason = state.getBlockedReason();
         state.setBlockedReason("");
         store.saveState(state);
-        logger.info("已解除账号暂停（此前原因：“ + reason + ”）；后续仍按今日计划时间和未处理名单执行，不会立即发送。");
+        logger.info("已解除账号暂停（此前原因：“ + reason + ”）；未确认用户会按重试计划继续处理，结果不确定时可能重复发送。");
       } catch (IOException error) {
         logger.exception("解除账号暂停失败", error);
       }
@@ -103,10 +104,6 @@ public class AutoRunner implements AutoCloseable {
       SendState state = store.loadState();
       if (state.rollOverIfNeeded(planner.now().toLocalDate())) {
         store.saveState(state);
-        legacyPauseLogged.set(false);
-      }
-      if (state.isLegacyUnattributedSentToday() && legacyPauseLogged.compareAndSet(false, true)) {
-        logger.warn("旧版本今天存在无法对应到具体用户的发送记录。为避免重复发送，本账号今天暂停剩余名单；明天恢复正常计划。");
       }
       if (!config.isEnabled() || !state.getBlockedReason().isBlank()) return;
       if (!planner.pendingTargets(config, state).isEmpty()) queueDailyCycle();
@@ -137,7 +134,6 @@ public class AutoRunner implements AutoCloseable {
       SendState state = store.loadState();
       if (state.rollOverIfNeeded(planner.now().toLocalDate())) {
         store.saveState(state);
-        legacyPauseLogged.set(false);
       }
       if (!config.isEnabled()) {
         logger.info("当前账号已停用，本次每日发送不执行。");
@@ -148,15 +144,11 @@ public class AutoRunner implements AutoCloseable {
         logDailySummary(config, state, true);
         return;
       }
-      if (state.isLegacyUnattributedSentToday()) {
-        logger.warn("旧版本今天存在无法归属到具体用户的发送记录，今日跳过剩余名单以避免重复发送。");
-        return;
-      }
       List<String> pending = planner.pendingTargets(config, state);
       if (pending.isEmpty()) return;
 
-      logger.info("开始每日发送：计划时间 " + config.getDailyTime() + "，名单 " + config.getTargets().size()
-          + " 位，今日尚未处理 " + pending.size() + " 位。");
+      logger.info("开始名单处理：每日计划时间 " + config.getDailyTime() + "，名单 " + config.getTargets().size()
+          + " 位，本轮待确认 " + pending.size() + " 位。");
       LocalDate runDate = planner.now().toLocalDate();
       for (String target : pending) {
         if (!planner.now().toLocalDate().equals(runDate)) {
@@ -172,7 +164,7 @@ public class AutoRunner implements AutoCloseable {
           store.saveState(state);
         }
         if (!state.getBlockedReason().isBlank()) break;
-        if (state.isLegacyUnattributedSentToday() || state.hasAttempted(target)) continue;
+        if (state.isConfirmed(target)) continue;
 
         state.beginAttempt(target, planner.now());
         store.saveState(state);
@@ -187,7 +179,7 @@ public class AutoRunner implements AutoCloseable {
         }
         state.recordResult(target, resultStatus, resultDetail(result), planner.now());
         store.saveState(state);
-        logTargetResult(target, result, resultStatus);
+        logTargetResult(target, result, resultStatus, state);
         if ("PAUSED".equals(resultStatus)) break;
       }
       state = store.loadState();
@@ -221,22 +213,47 @@ public class AutoRunner implements AutoCloseable {
     if (!discovery.isOk()) {
       return TaskResult.failed(target, discovery.getErrorCode(), discovery.getReason());
     }
-    if (discovery.getConversations().isEmpty()) {
+    List<ConversationTarget> matches = exactMatches(target, discovery.getConversations());
+    if (matches.isEmpty()) {
       return TaskResult.failed(target, "TARGET_NOT_FOUND", "会话列表中没有完全同名的用户");
     }
-    if (discovery.getConversations().size() != 1) {
-      return TaskResult.failed(target, "TARGET_AMBIGUOUS", "存在多个完全同名会话，无法确认指定用户；未发送");
+    if (matches.size() > 1) {
+      logger.warn("指定用户“" + target + "”有 " + matches.size()
+          + " 个完全同名且身份不同的会话，将逐个尝试发送以覆盖名单目标；结果不确定时可能重复发送。");
     }
-    ConversationTarget conversation = discovery.getConversations().getFirst();
-    if (!TargetNames.key(conversation.displayName()).equals(TargetNames.key(target))) {
-      return TaskResult.failed(target, "TARGET_NAME_MISMATCH", "扫描结果与配置名称不完全一致；未发送");
+
+    TaskResult firstUnconfirmed = null;
+    TaskResult lastConfirmed = null;
+    for (ConversationTarget conversation : matches) {
+      try {
+        TaskResult result = automator.sendMessage(config, conversation, taskId("发送消息"));
+        if (result.isBlocked() || isAccountLevelBlock(result.getErrorCode())) {
+          return result;
+        }
+        if (result.isConfirmed()) {
+          lastConfirmed = result;
+        } else if (firstUnconfirmed == null || (!firstUnconfirmed.isUncertain() && result.isUncertain())) {
+          firstUnconfirmed = result;
+        }
+      } catch (BrowserProfileInUseException error) {
+        return TaskResult.failed(target, "BROWSER_PROFILE_IN_USE", error.getMessage());
+      }
     }
-    conversation.setQuery(target);
-    try {
-      return automator.sendMessage(config, conversation, taskId("发送消息"));
-    } catch (BrowserProfileInUseException error) {
-      return TaskResult.failed(target, "BROWSER_PROFILE_IN_USE", error.getMessage());
+    return firstUnconfirmed == null ? lastConfirmed : firstUnconfirmed;
+  }
+
+  private List<ConversationTarget> exactMatches(String target, List<ConversationTarget> conversations) {
+    List<ConversationTarget> matches = new ArrayList<>();
+    Set<String> seenIdentities = new HashSet<>();
+    String targetKey = TargetNames.key(target);
+    for (ConversationTarget conversation : conversations) {
+      if (!targetKey.equals(TargetNames.key(conversation.displayName()))) continue;
+      String identity = conversation.getIdentity().strip();
+      if (!identity.isBlank() && !seenIdentities.add(identity)) continue;
+      conversation.setQuery(target);
+      matches.add(conversation);
     }
+    return matches;
   }
 
   private String resultStatus(TaskResult result) {
@@ -256,60 +273,55 @@ public class AutoRunner implements AutoCloseable {
     return nonEmpty(result.getReason(), result.getErrorDetail(), result.getSecurityPrompt(), result.getOutcome());
   }
 
-  private void logTargetResult(String target, TaskResult result, String status) {
+  private void logTargetResult(String target, TaskResult result, String status, SendState state) {
     if ("SENT".equals(status)) {
       logger.info("用户“" + target + "”已发送并确认。");
     } else if ("PAUSED".equals(status)) {
       logger.warn("用户“" + target + "”处理后账号进入人工暂停，已停止后续目标。");
-    } else if ("UNCERTAIN".equals(status)) {
-      logger.warn("用户“" + target + "”的发送结果不确定；今日不自动重试，以免重复发送。");
-    } else if ("NOT_FOUND".equals(status)) {
-      logger.warn("用户“" + target + "”未找到完全同名会话；今天不再重试。");
-    } else if ("AMBIGUOUS".equals(status)) {
-      logger.warn("用户“" + target + "”存在重名会话，未发送；今天不再重试。");
     } else {
-      logger.warn("用户“" + target + "”未发送成功，今天不自动重试：" + resultDetail(result));
+      DailyTargetResult recorded = state.getDailyTargets().get(TargetNames.key(target));
+      String retryAt = planner.nextAttemptAt(target, state).toLocalTime().toString();
+      String duplicateNote = "UNCERTAIN".equals(status) ? "上次可能已经送达，重试可能造成重复消息。" : "";
+      logger.warn("用户“" + target + "”本次未确认（" + status + "，第 "
+          + (recorded == null ? 1 : recorded.getAttemptCount()) + " 次）；本轮继续处理其他用户，预计 "
+          + retryAt + " 再试。" + duplicateNote + "详情：" + resultDetail(result));
     }
   }
 
   private void logDailySummary(AppConfig config, SendState state, boolean paused) {
     List<String> targets = config.getTargets();
     int total = targets.size();
-    int sent = 0;
+    int sent = state.confirmedCount(targets);
     int uncertain = 0;
     int ambiguous = 0;
     int notFound = 0;
     int failed = 0;
     int pausedTargets = 0;
-    int processed = 0;
     for (String target : targets) {
       DailyTargetResult result = state.getDailyTargets().get(TargetNames.key(target));
       if (result == null) continue;
-      processed++;
       switch (result.getStatus()) {
-        case "SENT", "MIGRATED_SENT" -> sent++;
-        case "UNCERTAIN", "PROCESSING" -> uncertain++;
+        case "UNCERTAIN", "PROCESSING", "MIGRATED_SENT" -> uncertain++;
         case "AMBIGUOUS" -> ambiguous++;
         case "NOT_FOUND" -> notFound++;
         case "PAUSED" -> pausedTargets++;
-        case "NOT_SENT", "FAILED" -> failed++;
+        default -> failed++;
       }
     }
-    int remaining = Math.max(0, total - processed);
+    int awaitingConfirmation = Math.max(0, total - sent);
+    if (total == 0) {
+      logger.warn("名单为空，没有发送消息。");
+      return;
+    }
     if (paused || !state.getBlockedReason().isBlank()) {
-      logger.warn("每日发送已暂停：确认发送 " + sent + "/" + total + "，已处理 " + processed + "/" + total
-          + "，剩余 " + remaining + " 位未处理。原因：" + state.getBlockedReason());
-    } else if (remaining > 0) {
-      logger.warn("每日名单尚未处理完：确认发送 " + sent + "/" + total + "，结果不确定 " + uncertain
-          + "，未找到 " + notFound + "，重名 " + ambiguous + "，失败 " + failed + "，剩余 " + remaining + " 位。");
-    } else if (total > 0 && sent == total) {
-      logger.info("今日名单全部发送成功：" + sent + "/" + total + " 位用户。");
-    } else if (total == 0) {
-      logger.warn("今日名单为空，没有发送消息。");
+      logger.warn("账号级问题暂停名单：确认发送 " + sent + "/" + total + "，待确认 " + awaitingConfirmation
+          + " 位；解除暂停后会继续处理。原因：" + state.getBlockedReason());
+    } else if (awaitingConfirmation > 0) {
+      logger.warn("名单仍有待确认用户：确认发送 " + sent + "/" + total + "，待确认 " + awaitingConfirmation
+          + "（结果不确定 " + uncertain + "，未找到 " + notFound + "，重名 " + ambiguous + "，失败 " + failed
+          + "，暂停目标 " + pausedTargets + "）；程序会继续重试，发送结果不确定时可能重复发送。");
     } else {
-      logger.warn("今日名单已处理完，但并非全部发送成功：确认发送 " + sent + "/" + total
-          + "，结果不确定 " + uncertain + "，未找到 " + notFound + "，重名 " + ambiguous
-          + "，失败 " + failed + "，账号级暂停目标 " + pausedTargets + "。");
+      logger.info("今日名单全部发送成功：" + sent + "/" + total + " 位用户。");
     }
   }
 
