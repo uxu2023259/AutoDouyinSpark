@@ -259,7 +259,7 @@ New-Item -ItemType Directory -Path $buildDir -Force | Out-Null
 Write-Host "正在执行 Maven 测试和打包..."
 if ($SkipTests) {
   Write-Host "跳过测试，仅构建发布产物。"
-  & mvn -Dmaven.test.skip=true package
+  & mvn '-Dmaven.test.skip=true' package
 } else {
   & mvn -DskipTests=false package
 }
