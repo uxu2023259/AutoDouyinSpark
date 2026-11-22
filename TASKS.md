@@ -163,3 +163,44 @@
 - 当前阶段：同名候选的无 ID 回退路径已收紧到同一行确认；最终 1.0.63 全测试/打包、ZIP/JAR/版本核验及本地提交均完成。
 - 阻塞：隔离 UI 检查资料的递归删除被执行环境策略拒绝；仅为 ignored 的临时配置目录。
 - 下一步：无；如需清理隔离 UI 资料，手动删除 `build/visual-audit-1.0.63-data`。
+
+## 第五轮：适配新版私信页面
+
+### 目标与验收
+
+- 抖音创作者中心通过 `creator_pc_im_saas` 灰度加载新版 PC IM SaaS 时，仍能发现完全同名会话、确认切换、定位编辑器和发送按钮，并以新增己方文字气泡作为发送成功证据。
+- 保留旧版 `following/chat` 页面兼容；页面恢复旧组件时不因本次适配中断。
+- 新版会话身份不得依赖哈希类名；优先使用 DOM 中的稳定标识或头像资源路径，位置回退仍要求同一选中行。
+- 发送尚未进入红色可用态、出现发送中状态或明确失败状态时，不得误报成功。
+- 使用当前生产构建的真实新版 DOM 结构制作脱敏离线快照，补充选择器/安全回归测试，运行 JavaScript 语法检查、完整 Maven 测试和 Windows 构建。
+- 更新用户说明与更新日志；复核差异、版本和产物后，提交并同步当前任务分支。
+
+### Resource status
+
+- **LIMITED** — Codex 用量工具预检：5 小时窗口已用 100%（剩余 0%），周窗口已用 31%（剩余 69%），普通模型用量已受限制；账户有 2 个可用完整重置，但未在未获用户明确确认时消费。
+
+### 检查结论与设计
+
+- 当前生产主页仍把私信挂在 `/creator-micro/data/following/chat`；页面内容由 `pages-chat-entry` 根据 `creator_pc_im_saas` 灰度决定加载旧 `pages-chat-legacy` 或独立远端 `@pc-im/im`。
+- 新版真实结构包括 `[data-e2e='conversation-item']`、`.conversationConversationListwrapper`、`.RightPanelHeadertitle`、`[data-e2e='msg-input'] .ace-editor[data-slate-editor='true']`、`.messageMsgInputpublishBtn`、`.messageMessageBoxisFromMe`、`.MessageItemTextbubbleTextContent` 和 `ContentSideSendStatus*`。
+- 新发送按钮是 SVG，文本为空时无 `.messageMsgInputpublishRedBtn`，不能只检查 `disabled` 属性；输入后必须等待可用态。
+- 新旧选择器通过统一适配函数合并，新版优先；旧版选择器和证据规则保持原样。
+
+### 任务
+
+- [x] 预检工作区、分支、远端、生产入口、私信灰度分片和旧版兼容路径。
+- [x] 实现新版会话列表、标题、选中态、编辑器、发送按钮和消息证据适配；旧版路径保留。
+- [x] 添加脱敏新版离线页面、选择器安全测试和内置 Chromium 端到端离线流程测试。
+- [x] 更新用户说明、变更日志和版本；运行语法检查及完整测试。
+- [x] 完成 Windows 发布构建，核验 ZIP、JAR、版本、内置浏览器与运行时。
+- [ ] 审查最终差异，提交并推送到当前任务分支，确认远端同步。
+
+### 检查点
+
+- 基线：分支 `codex/optimize-log-window`，提交 `d2af14f`，工作区干净，版本 1.0.63；远端分支存在。
+- 生产结构证据：Creator 主包当前版本 `1.0.0.4913`；新版入口分片 `pages-chat-entry.73e609cd.js`；IM SaaS manifest 构建版本 `1.0.0.1201`。
+- 定向验证：`ModernPrivateMessageSelectorTest`、旧选择器/安全测试和新版流程测试通过；内置 Chromium 离线流程覆盖发现、切换、输入、发送按钮可用态和新气泡确认。
+- 全量验证：`mvn -q clean test` 通过，35 项测试、0 失败/错误/跳过；JavaScript `node --check` 与 `git diff --check` 通过。
+- 发布验证：`build.ps1` 退出码 0，版本同步为 1.0.64；`PLUGIN` 唯一 ZIP 为 466,963,781 字节、682 个条目，包含原生启动器、351 个运行时条目和内置 Chromium。ZIP 内主 JAR 与 `target/douyin-auto-spark-1.0.64.jar` 的 SHA-256 均为 `1137BFCB...C5597A53B`，包内 `content-automation.js` 与当前源码完全一致。
+- 当前阶段：代码、文档、测试和发布产物已稳定，待最终差异审查、提交与远端同步。
+- 下一步：审查差异和敏感数据边界，提交并推送当前任务分支。

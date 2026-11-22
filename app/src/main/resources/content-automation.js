@@ -77,11 +77,43 @@ function dedupeElements(elements) {
   return Array.from(new Set(elements.filter(Boolean)));
 }
 
+function classNameOf(element) {
+  const className = element?.className;
+  return typeof className === "string" ? className : className?.baseVal || "";
+}
+
+function normalizedResourceIdentity(value) {
+  if (!value || value.startsWith("data:")) {
+    return "";
+  }
+  try {
+    const url = new URL(value, location.href);
+    return `${url.host}${url.pathname}`;
+  } catch (error) {
+    return "";
+  }
+}
+
 function textIncludesSend(button) {
   return normalize(button?.textContent).includes("发送");
 }
 
 function getClickableConversationItems(selectorTrace) {
+  const saasItems = Array.from(document.querySelectorAll("[data-e2e='conversation-item']"))
+    .filter((element) => {
+      if (!visible(element)) {
+        return false;
+      }
+      const rect = element.getBoundingClientRect();
+      return rect.left < window.innerWidth * 0.5
+        && rect.width > 80
+        && rect.height >= 24;
+    });
+  if (saasItems.length) {
+    selectorTrace.push("conversation-items:im-saas");
+    return saasItems;
+  }
+
   const grids = Array.from(document.querySelectorAll("[role='grid'].ReactVirtualized__Grid, [role='grid'][aria-label='grid']"))
     .filter((element) => visible(element) && element.getBoundingClientRect().left < window.innerWidth * 0.5);
   const gridCells = grids.flatMap((grid) => Array.from(grid.querySelectorAll("[role='gridcell']")));
@@ -106,6 +138,7 @@ function getClickableConversationItems(selectorTrace) {
 
 function findConversationNameNode(item) {
   const selectors = [
+    ".conversationConversationItemtitle",
     "[class*='item-header-name']",
     "[class*='author-name']",
     "strong",
@@ -130,8 +163,24 @@ function getConversationIdentity(item) {
   if (!item) {
     return "";
   }
-  const identityNodes = [item, ...Array.from(item.querySelectorAll("[data-conversation-id], [data-user-id], [data-id], [data-node-key], [data-row-key], a[href]"))];
-  const identityAttributes = ["data-conversation-id", "data-user-id", "data-id", "data-node-key", "data-row-key", "href"];
+  const identityNodes = [
+    item,
+    ...Array.from(item.querySelectorAll(
+      "[data-conversation-id], [data-conversation-short-id], [data-user-id], [data-sec-uid], [data-uid], " +
+      "[data-id], [data-node-key], [data-row-key], a[href]"
+    ))
+  ];
+  const identityAttributes = [
+    "data-conversation-id",
+    "data-conversation-short-id",
+    "data-user-id",
+    "data-sec-uid",
+    "data-uid",
+    "data-id",
+    "data-node-key",
+    "data-row-key",
+    "href"
+  ];
   for (const node of identityNodes) {
     for (const attribute of identityAttributes) {
       const value = node.getAttribute(attribute);
@@ -139,6 +188,14 @@ function getConversationIdentity(item) {
         return `${attribute}:${value}`;
       }
     }
+  }
+  const avatar = item.querySelector(
+    ".conversationConversationItemrowArea1 img[src], " +
+    ".commonIMAvataravatarContainer img[src]"
+  );
+  const avatarIdentity = normalizedResourceIdentity(avatar?.currentSrc || avatar?.getAttribute("src") || "");
+  if (avatarIdentity) {
+    return `im-saas-avatar:${avatarIdentity}`;
   }
   return item.id ? `id:${item.id}` : "";
 }
@@ -150,7 +207,13 @@ function isSelectedConversation(item) {
   if (item.getAttribute("aria-selected") === "true" || item.getAttribute("aria-current") === "true") {
     return true;
   }
-  const className = typeof item.className === "string" ? item.className.toLowerCase() : "";
+  const className = classNameOf(item).toLowerCase();
+  if (item.getAttribute("data-selected") === "true" || item.getAttribute("data-active") === "true") {
+    return true;
+  }
+  if (className.includes("conversationconversationitemcurconversation")) {
+    return true;
+  }
   if (className.includes("active-") || className.includes("selected-")) {
     return true;
   }
@@ -166,6 +229,19 @@ function getSelectedConversationName(selectorTrace) {
 }
 
 function findConversationList(selectorTrace) {
+  const saasList = Array.from(document.querySelectorAll(".conversationConversationListwrapper"))
+    .find((element) => {
+      if (!visible(element)) {
+        return false;
+      }
+      const rect = element.getBoundingClientRect();
+      return rect.left < window.innerWidth * 0.5 && rect.height > 100;
+    });
+  if (saasList) {
+    selectorTrace.push("conversation-list:im-saas");
+    return saasList;
+  }
+
   const candidates = dedupeElements([
     ...Array.from(document.querySelectorAll("[role='grid'].ReactVirtualized__Grid")),
     ...Array.from(document.querySelectorAll("[role='grid']")),
@@ -190,8 +266,28 @@ function findConversationList(selectorTrace) {
 }
 
 function getCurrentChatTarget(selectorTrace) {
+  const preferredSelectors = [
+    ".RightPanelHeadertitle",
+    ".StackLayoutStackChatHeadertitle",
+    "[class*='box-header-name']"
+  ];
+  for (const selector of preferredSelectors) {
+    const header = Array.from(document.querySelectorAll(selector)).find((element) => {
+      if (!visible(element)) {
+        return false;
+      }
+      const text = normalize(element.textContent).replace(/查看Ta的主页/g, "").trim();
+      return text.length > 0 && text.length <= 40;
+    });
+    if (header) {
+      selectorTrace.push(selector === ".RightPanelHeadertitle"
+        ? "chat-header:im-saas"
+        : "chat-header:preferred");
+      return normalize(header.textContent).replace(/查看Ta的主页/g, "").trim();
+    }
+  }
+
   const headerCandidates = dedupeElements([
-    ...Array.from(document.querySelectorAll("[class*='box-header-name']")),
     ...Array.from(document.querySelectorAll("[class*='header-name']")),
     ...Array.from(document.querySelectorAll("[class*='box-header'] strong")),
     ...Array.from(document.querySelectorAll("[class*='box-header'] *")),
@@ -226,6 +322,22 @@ function getCurrentChatTarget(selectorTrace) {
 }
 
 function findEditor(selectorTrace) {
+  const saasEditor = Array.from(document.querySelectorAll(
+    "[data-e2e='msg-input'] [contenteditable='true'][data-slate-editor='true'], " +
+    "[data-e2e='msg-input'] .ace-editor[contenteditable='true'], " +
+    ".messageEditorinputArea [contenteditable='true']"
+  )).find((element) => {
+    if (!visible(element)) {
+      return false;
+    }
+    const rect = element.getBoundingClientRect();
+    return rect.left > window.innerWidth * 0.25 && rect.bottom > window.innerHeight * 0.6;
+  });
+  if (saasEditor) {
+    selectorTrace.push("editor:im-saas");
+    return saasEditor;
+  }
+
   const editorCandidates = dedupeElements([
     ...Array.from(document.querySelectorAll("[class*='chat-editor-'] [class*='chat-input-'][contenteditable='true']")),
     ...Array.from(document.querySelectorAll("[contenteditable='true']")),
@@ -247,6 +359,15 @@ function findEditor(selectorTrace) {
 }
 
 function findSendButton(selectorTrace) {
+  const saasSendButton = Array.from(document.querySelectorAll(
+    "[data-e2e='msg-input'] [class*='messageMsgInputpublishBtn'], " +
+    "[data-e2e='msg-input'] .e2e-send-msg-btn"
+  )).find(visible);
+  if (saasSendButton) {
+    selectorTrace.push("send-button:im-saas");
+    return saasSendButton;
+  }
+
   const buttonCandidates = dedupeElements([
     ...Array.from(document.querySelectorAll("[class*='chat-editor-'] button")),
     ...Array.from(document.querySelectorAll("button")),
@@ -267,6 +388,20 @@ function findSendButton(selectorTrace) {
   }
 
   return null;
+}
+
+function isSendButtonDisabled(button) {
+  if (!button) {
+    return true;
+  }
+  if (button.disabled || button.getAttribute("aria-disabled") === "true") {
+    return true;
+  }
+  const className = classNameOf(button);
+  if (className.includes("messageMsgInputpublishBtn")) {
+    return !className.includes("messageMsgInputpublishRedBtn");
+  }
+  return /(^|\s)(disabled|inactive)(\s|$)/i.test(className);
 }
 
 function isOnChatPage() {
@@ -523,12 +658,20 @@ function exactOutgoingMessageElements(messageText) {
   if (!expected) {
     return [];
   }
-  const outgoingItems = Array.from(document.querySelectorAll("[class*='box-item-'][class*='is-me-']"));
+  const saasOutgoingItems = Array.from(document.querySelectorAll("[class*='messageMessageBoxmessageBox']"))
+    .filter((item) => item.querySelector("[class*='messageMessageBoxisFromMe']"));
+  const outgoingItems = dedupeElements([
+    ...Array.from(document.querySelectorAll("[class*='box-item-'][class*='is-me-']")),
+    ...saasOutgoingItems
+  ]);
   return dedupeElements(outgoingItems).filter((item) => {
     if (!visible(item)) {
       return false;
     }
-    const textNodes = Array.from(item.querySelectorAll("[class*='text-item-message-'], [class*='text-prz9K6'], pre"));
+    const textNodes = Array.from(item.querySelectorAll(
+      "[class*='text-item-message-'], [class*='text-prz9K6'], " +
+      ".MessageItemTextbubbleTextContent, pre"
+    ));
     return textNodes.some((node) => visible(node) && normalize(node.textContent) === expected);
   });
 }
@@ -571,6 +714,13 @@ function messageTimestampEpochMillis(element) {
 }
 
 function messageIsPending(element) {
+  const saasStatus = element.querySelector(
+    ".ContentSideSendStatussending, [class*='SendStatussending'], .im-saas-message-spin"
+  );
+  if (saasStatus && visible(saasStatus)) {
+    return true;
+  }
+
   const status = element.querySelector("[class*='box-item-message-status-']");
   if (!status) {
     return false;
@@ -580,6 +730,13 @@ function messageIsPending(element) {
 }
 
 function messageHasExplicitFailure(element) {
+  const saasStatus = element.querySelector(
+    ".ContentSideSendStatusretry, [class*='SendStatusfailed'], [class*='SendStatusrejected']"
+  );
+  if (saasStatus && visible(saasStatus)) {
+    return true;
+  }
+
   const status = element.querySelector("[class*='box-item-message-status-']");
   if (!status || !visible(status)) {
     return false;
@@ -736,47 +893,58 @@ async function verifyTargetSwitch(input) {
     baselineMessageTimestamps: baseline.deliverableTimestamps,
     editorBounds: elementBounds(editor),
     sendButtonBounds: elementBounds(sendButton),
-    sendButtonDisabled: Boolean(sendButton.disabled || sendButton.getAttribute("aria-disabled") === "true"),
+    sendButtonDisabled: isSendButtonDisabled(sendButton),
     selectorTrace
   };
 }
 
-function validateMessageInput(input) {
+async function validateMessageInput(input) {
   const attemptId = input.attemptId || "";
   const session = sendSessions()[attemptId];
-  const editor = session ? findEditor(session.selectorTrace) : null;
-  if (!session || !editor || editorText(editor) !== normalize(session.messageText)) {
-    return createFailure("EDITOR_WRITE_FAILED", "逐字输入后输入框内容与预期不一致", {
-      phase: PHASES.TYPING_MESSAGE,
-      attemptId,
-      selectorTrace: session?.selectorTrace || []
-    });
-  }
-  const sendButton = findSendButton(session.selectorTrace);
-  if (!sendButton || !visible(sendButton)) {
-    return createFailure("SEND_BUTTON_NOT_FOUND", "逐字输入后没有找到实际发送按钮", {
-      phase: PHASES.SENDING_MESSAGE,
-      attemptId,
-      selectorTrace: session.selectorTrace
-    });
-  }
-  const sendButtonDisabled = Boolean(sendButton.disabled || sendButton.getAttribute("aria-disabled") === "true");
-  if (sendButtonDisabled) {
+  const observed = await waitFor(() => {
+    const editor = session ? findEditor(session.selectorTrace) : null;
+    if (!session || !editor || editorText(editor) !== normalize(session.messageText)) {
+      return null;
+    }
+    const sendButton = findSendButton(session.selectorTrace);
+    if (!sendButton || !visible(sendButton) || isSendButtonDisabled(sendButton)) {
+      return null;
+    }
+    return { editor, sendButton };
+  }, 3000, 100);
+  if (!observed) {
+    const editor = session ? findEditor(session.selectorTrace) : null;
+    if (!session || !editor || editorText(editor) !== normalize(session.messageText)) {
+      return createFailure("EDITOR_WRITE_FAILED", "逐字输入后输入框内容与预期不一致", {
+        phase: PHASES.TYPING_MESSAGE,
+        attemptId,
+        selectorTrace: session?.selectorTrace || []
+      });
+    }
+    const sendButton = findSendButton(session.selectorTrace);
+    if (!sendButton || !visible(sendButton)) {
+      return createFailure("SEND_BUTTON_NOT_FOUND", "逐字输入后没有找到实际发送按钮", {
+        phase: PHASES.SENDING_MESSAGE,
+        attemptId,
+        selectorTrace: session.selectorTrace
+      });
+    }
     return createFailure("SEND_BUTTON_DISABLED", "逐字输入后发送按钮仍不可用，未执行发送", {
       phase: PHASES.SENDING_MESSAGE,
       attemptId,
       selectorTrace: session.selectorTrace
     });
   }
+
   return {
     ok: true,
     success: false,
     skipped: false,
     outcome: "READY",
     attemptId,
-    editorBounds: elementBounds(editor),
-    sendButtonBounds: elementBounds(sendButton),
-    sendButtonDisabled,
+    editorBounds: elementBounds(observed.editor),
+    sendButtonBounds: elementBounds(observed.sendButton),
+    sendButtonDisabled: false,
     selectorTrace: session.selectorTrace
   };
 }
@@ -895,7 +1063,7 @@ async function runDouyinAutoSpark(input) {
     return await verifyTargetSwitch(input);
   }
   if (input.action === "validate-message-input") {
-    return validateMessageInput(input);
+    return await validateMessageInput(input);
   }
   if (input.action === "verify-message-send") {
     return await verifyMessageSend(input);

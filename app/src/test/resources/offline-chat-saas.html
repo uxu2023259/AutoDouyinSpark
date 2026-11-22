@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>抖音创作者中心新版私信离线结构测试</title>
+  <style>
+    html, body { width: 1280px; height: 900px; margin: 0; }
+    .im-saas-viewport-C7YJGz { display: flex; width: 1280px; height: 900px; }
+    .left { width: 360px; padding: 16px; box-sizing: border-box; }
+    .conversationConversationListwrapper { height: 700px; overflow-y: auto; }
+    .conversationConversationItemwrapper {
+      display: flex;
+      width: 320px;
+      height: 72px;
+      padding: 10px;
+      box-sizing: border-box;
+    }
+    .conversationConversationItemwrapper.conversationConversationItemcurConversation {
+      background: #f1f1f1;
+    }
+    .conversationConversationItemrowArea1 { width: 52px; height: 52px; }
+    .conversationConversationItemrowArea1 img { width: 48px; height: 48px; }
+    .conversationConversationItemrowArea2 { flex: 1; }
+    .right { display: flex; flex: 1; min-width: 0; flex-direction: column; }
+    .RightPanelHeaderconvHeader { height: 72px; }
+    .RightPanelHeadertitle { padding: 24px; font-size: 20px; }
+    .messageMessageListwrapper { height: 600px; overflow-y: auto; }
+    .messageMessageBoxmessageBox { padding: 8px 0; }
+    .messageMessageBoxcontentBox { display: flex; }
+    .messageMessageBoxcontentBox.messageMessageBoxisFromMe { justify-content: flex-end; }
+    .MessageItemTextbubbleTextContent { max-width: 420px; padding: 8px 12px; background: #eee; }
+    .componentsRightPanelinputArea { position: absolute; bottom: 24px; right: 24px; width: 840px; }
+    .messageMsgInputcontainer { display: flex; align-items: flex-end; gap: 8px; }
+    .messageMsgInputinputColumn { flex: 1; border: 1px solid #ddd; }
+    .messageMsgInputinputRow { display: flex; min-height: 52px; }
+    .messageEditorimChatEditorContainer { flex: 1; padding: 14px; }
+    .messageEditorinputArea { min-height: 24px; outline: none; }
+    .messageMsgInputinputAction { display: flex; align-items: center; }
+    .messageMsgInputpublishBtn { width: 36px; height: 36px; cursor: pointer; opacity: .35; }
+    .messageMsgInputpublishBtn.messageMsgInputpublishRedBtn { opacity: 1; }
+    .ContentSideSendStatusretry { color: #fe2c55; }
+  </style>
+</head>
+<body>
+  <main class="im-saas-viewport-C7YJGz">
+    <section class="left">
+      <div class="conversationConversationListwrapper">
+        <div class="conversationConversationItemwrapper" data-e2e="conversation-item">
+          <div class="conversationConversationItemrowArea1">
+            <div class="commonIMAvataravatarContainer">
+              <img src="https://example.invalid/avatar-test-session.png" alt="">
+            </div>
+          </div>
+          <div class="conversationConversationItemrowArea2">
+            <div class="conversationConversationItemtitleWrapper">
+              <div class="conversationConversationItemtitle">测试会话</div>
+            </div>
+            <div class="conversationConversationItemDeschintWrapper">测试最近消息</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="right">
+      <header class="RightPanelHeaderconvHeader">
+        <div class="RightPanelHeadertitle">其他会话</div>
+      </header>
+
+      <div class="messageMessageListwrapper">
+        <div class="messageMessageBoxmessageBox">
+          <div class="messageMessageBoxcontentBox messageMessageBoxisFromMe">
+            <div class="MessageItemTextcontainer MessageItemTextisFromMe">
+              <div class="MessageItemTextbubbleContent">
+                <div class="MessageItemTextbubbleTextContent">测试消息</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="componentsRightPanelinputArea">
+        <div class="messageMsgInputcontainer" data-e2e="msg-input">
+          <div class="messageMsgInputinputColumn">
+            <div class="messageMsgInputinputRow">
+              <div class="messageEditorimChatEditorContainer" data-apm-action="editor">
+                <div class="messageEditorinputArea">
+                  <div class="ace-editor zoneId-0" data-slate-editor="true" contenteditable="true"></div>
+                </div>
+              </div>
+              <div class="messageMsgInputinputAction">
+                <svg class="messageMsgInputpublishBtn e2e-send-msg-btn" viewBox="0 0 36 36"></svg>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const conversation = document.querySelector("[data-e2e='conversation-item']");
+    const title = document.querySelector(".RightPanelHeadertitle");
+    const editor = document.querySelector("[data-e2e='msg-input'] [contenteditable='true']");
+    const sendButton = document.querySelector(".messageMsgInputpublishBtn");
+    const messageList = document.querySelector(".messageMessageListwrapper");
+
+    conversation.addEventListener("mousedown", () => {
+      conversation.classList.add("conversationConversationItemcurConversation");
+      title.textContent = "测试会话";
+    });
+
+    editor.addEventListener("input", () => {
+      const hasText = Boolean(editor.innerText || editor.textContent);
+      sendButton.classList.toggle("messageMsgInputpublishRedBtn", hasText);
+    });
+
+    sendButton.addEventListener("click", () => {
+      const sentText = (editor.innerText || editor.textContent || "").trim();
+      if (!sentText) {
+        return;
+      }
+      editor.innerHTML = "";
+      sendButton.classList.remove("messageMsgInputpublishRedBtn");
+      const message = document.createElement("div");
+      message.className = "messageMessageBoxmessageBox";
+      message.innerHTML = `
+        <div class="messageMessageBoxcontentBox messageMessageBoxisFromMe">
+          <div class="MessageItemTextcontainer MessageItemTextisFromMe">
+            <div class="MessageItemTextbubbleContent">
+              <div class="MessageItemTextbubbleTextContent"></div>
+            </div>
+          </div>
+        </div>`;
+      message.querySelector(".MessageItemTextbubbleTextContent").textContent = sentText;
+      messageList.appendChild(message);
+    });
+  </script>
+</body>
+</html>
